@@ -11,3 +11,8 @@ __pycache__/
 
 # per-user IDE state
 /.idea/workspace.xml
+
+# runtime state and per-machine calibration
+/data
+/tracker/calibration.json
+/tracker/sheet.png

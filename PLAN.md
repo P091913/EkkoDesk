@@ -2,7 +2,7 @@
 
 A projector above the desk shows widgets on the desk surface. A camera watches your hands, and pinch gestures grab, move, resize and tap the widgets.
 
-Status: phase 1 built (2026-11-03). The decisions at the end are still open.
+Status: phases 1 and 2 built (2026-11-03). Phase 2 still needs the recordings and a calibration run (README). The decisions at the end are still open.
 
 ## Context: what already exists
 
@@ -138,6 +138,12 @@ Phases 0–3 need no new hardware.
   - Test without a camera: warp the image by a known homography and check it's recovered within 2 px.
 - **Gestures:** tap, two-hand resize, dock, and stacking.
 - **Saving:** `data/desk.json`.
+- **Built:**
+  - `data/desk.json` starts with empty `chat` and `timer` cards that phase 3 fills in, so the file never needs migrating. Until then a tap shows as a tap count on the card.
+  - The dock strip is the bottom 10% of the page. A second pointer resizes about the card's centre, and the one left after a resize carries on dragging.
+  - Calibration uses 15 markers (4x4 dictionary). A synthetic warp comes back within 1.1 px.
+  - The One Euro filter starts at a 1 Hz minimum cutoff and a beta of 10 (positions are 0–1, so speeds are pages per second).
+- **Still to do:** record the five clips listed in the README, tune `START`, `END` and the filter until `test_pinch.py` passes on them, then calibrate on the printed sheet.
 
 ### Phase 3: widgets and Ekko (PC only)
 
@@ -187,6 +193,7 @@ tracker/requirements.txt     mediapipe, websockets (pinned)
 tracker/main.py              --source 0|url  --desk url  --record/--replay file  --calibrate  --preview
 tracker/pinch.py (+ test)    landmarks → down/move/up/cancel
 tracker/calibrate.py (+ test) ArUco image, detection, homography (RANSAC), error in px
+tracker/recordings/          the clips the tests replay (*.jsonl.gz)
 ```
 
 **Python setup (checked 2026-11-03):**

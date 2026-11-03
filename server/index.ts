@@ -1,23 +1,28 @@
 import type { Server } from 'node:http';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { app, keyOk, pageOk } from './app.ts';
+import { createApp, keyOk, pageOk } from './app.ts';
+import { createDesk, type Widget } from './desk.ts';
 
 const port = Number(process.env.PORT ?? 8081);
 if (!process.env.DESK_TRACKER_KEY) console.warn('DESK_TRACKER_KEY is not set: every tracker will be refused');
 
-// Loopback only: phase 4's `tailscale serve` is the one way in from the network.
-const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () =>
-  console.log(`ekko-desk on http://127.0.0.1:${port}`),
-) as Server;
-
-// 1 MB fits phase 2's calibration PNG with room to spare.
-const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 const trackers = new Set<WebSocket>();
 const pages = new Set<WebSocket>();
 
 const status = () => JSON.stringify({ type: 'tracker', connected: trackers.size > 0 });
+const state = (widgets: Widget[]) => JSON.stringify({ type: 'state', widgets });
 const toPages = (msg: string) => pages.forEach((p) => p.send(msg));
+
+const desk = createDesk('data/desk.json', (widgets) => toPages(state(widgets)));
+
+// Loopback only: phase 4's `tailscale serve` is the one way in from the network.
+const server = serve({ fetch: createApp(desk).fetch, hostname: '127.0.0.1', port }, () =>
+  console.log(`ekko-desk on http://127.0.0.1:${port}`),
+) as Server;
+
+// 1 MB fits the calibration PNG with room to spare.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
 server.on('upgrade', (req, socket, head) => {
   // Node drops its own error handler on upgrade sockets; an unhandled reset would crash the server.
@@ -42,6 +47,7 @@ server.on('upgrade', (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       pages.add(ws);
       ws.send(status());
+      ws.send(state(desk.widgets()));
       ws.on('error', (e) => console.error('page:', e.message));
       ws.on('close', () => pages.delete(ws));
     });
