@@ -1,0 +1,55 @@
+/* Projected onto a desk: black keeps light off your hands, and dim cards keep the camera's exposure steady.
+   No blur, shadows, transitions or animation: the Pi redraws only when something changes. */
+:root {
+  color-scheme: dark;
+  --card: #161a24;
+  --line: #2a3040;
+  --text: #c9cdd8;
+  --muted: #6b7183;
+  --accent: #6d7cff;
+  font: 22px/1.35 system-ui, sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+  background: #000;
+  color: var(--text);
+  user-select: none;
+  touch-action: none;
+}
+.card,
+.pinch {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.card {
+  display: grid;
+  place-items: center;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.pinch {
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.status {
+  position: fixed;
+  left: 16px;
+  bottom: 12px;
+  color: var(--muted);
+  font-size: 16px;
+}
