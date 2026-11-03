@@ -1,0 +1,13 @@
+/node_modules
+/web/dist
+npm-debug.log*
+
+# holds the keys - never commit
+.env
+
+/tracker/.venv
+/tracker/*.task
+__pycache__/
+
+# per-user IDE state
+/.idea/workspace.xml
