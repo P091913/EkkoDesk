@@ -1,0 +1,28 @@
+{
+  "name": "ekko-desk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --env-file=.env server/index.ts",
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node --test \"server/**/*.test.ts\" \"web/**/*.test.ts\"",
+    "check": "tsc -p . && tsc -p web"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "hono": "^4.13.16",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.2",
+    "preact": "^11.1.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.5"
+  }
+}
