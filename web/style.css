@@ -38,7 +38,26 @@ body {
   border: 1px solid var(--line);
   border-radius: 12px;
 }
+.chip {
+  font-size: 16px;
+  color: var(--muted);
+}
+.strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--line);
+}
+/* The calibration image covers everything, stretched to the page like the 0–1 positions are. */
+.sheet {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2147483647;
+}
 .pinch {
+  z-index: 2147483646;
   width: 28px;
   height: 28px;
   margin: -14px 0 0 -14px;

@@ -1,16 +1,43 @@
-"""Hands seen each frame -> pointer events (down/move/up/cancel), as in PROTOCOL.md.
+"""Frames of hand landmarks -> pointer events (down/move/up/cancel), as in PROTOCOL.md.
 
-Plain numbers in and dicts out: no MediaPipe or camera, so tests can drive it directly.
+Plain numbers in and dicts out: no MediaPipe or camera, so tests and recordings can drive it directly.
+A frame is {"t": ms, "hands": [{"label", "img": 21 x [x, y] (0-1 of the camera frame), "world": 21 x [x, y, z] (metres)}]}.
 """
+import gzip
+import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-# Starting values; phase 2 tunes them from recordings.
+# Starting values; tune them from recordings.
 START = 0.25  # a pinch starts after START_FRAMES frames below this...
 END = 0.40  # ...and ends above this. The gap between them is the hysteresis.
 START_FRAMES = 2
 GRACE_MS = 250  # how long a lost hand keeps its pinch before `cancel`
 MATCH = 0.2  # the furthest a hand can move between frames (0-1 units) and still be the same hand
+MIN_CUTOFF = 1.0  # One Euro filter, in Hz: lower is steadier when the hand is slow...
+BETA = 10.0  # ...and higher has less lag when it's fast (positions are 0-1, so speeds are pages per second)
+
+
+class OneEuro:
+    """The One Euro filter (Casiez et al., 2012): heavy smoothing when slow, little lag when fast."""
+
+    def __init__(self, min_cutoff=MIN_CUTOFF, beta=BETA, d_cutoff=1.0):
+        self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
+        self.x = self.dx = self.t = None
+
+    @staticmethod
+    def _alpha(dt, cutoff):
+        return 1 / (1 + 1 / (2 * math.pi * cutoff * dt))
+
+    def __call__(self, x: float, t: int) -> float:
+        if self.t is None:
+            self.x, self.dx, self.t = x, 0.0, t
+            return x
+        dt = max((t - self.t) / 1000, 1e-3)
+        self.dx += self._alpha(dt, self.d_cutoff) * ((x - self.x) / dt - self.dx)
+        self.x += self._alpha(dt, self.min_cutoff + self.beta * abs(self.dx)) * (x - self.x)
+        self.t = t
+        return self.x
 
 
 @dataclass
@@ -30,13 +57,34 @@ class _Track:
     seen: int
     below: int = 0  # frames in a row below START
     id: int | None = None  # pinch id while pinched
+    fx: OneEuro = field(default_factory=OneEuro)
+    fy: OneEuro = field(default_factory=OneEuro)
 
 
 def measure(world) -> float:
     """Thumb tip to index tip over palm size (wrist to index knuckle), from 3D world landmarks."""
-    def d(a, b):
-        return math.dist((world[a].x, world[a].y, world[a].z), (world[b].x, world[b].y, world[b].z))
-    return d(4, 8) / max(d(0, 5), 1e-6)
+    return math.dist(world[4], world[8]) / max(math.dist(world[0], world[5]), 1e-6)
+
+
+def mirror(x: float, y: float) -> tuple[float, float]:
+    """The mapping until calibration.json exists: the camera frame is the page, mirrored for a webcam facing you."""
+    return 1 - x, y
+
+
+def hands_from(frame: dict, to_page) -> list[Hand]:
+    """A live or recorded frame -> hands, each pinch point (midway between thumb and index tips) mapped onto the page."""
+    hands = []
+    for hd in frame['hands']:
+        img = hd['img']
+        x, y = to_page((img[4][0] + img[8][0]) / 2, (img[4][1] + img[8][1]) / 2)
+        hands.append(Hand(measure(hd['world']), x, y, hd['label']))
+    return hands
+
+
+def read_clip(path) -> list[dict]:
+    """A recording made with main.py --record: gzipped, one frame per line."""
+    with gzip.open(path, 'rt', encoding='utf-8') as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 class Pincher:
@@ -53,7 +101,7 @@ class Pincher:
                 tr = _Track(h.x, h.y, h.label, t)
                 self.tracks.append(tr)
             # 3 decimals is about 1 px at 720p; rounding stops invisible jitter from sending moves.
-            x, y = round(h.x, 3), round(h.y, 3)
+            x, y = round(tr.fx(h.x, t), 3), round(tr.fy(h.y, t), 3)
             moved = (x, y) != (tr.x, tr.y)
             tr.x, tr.y, tr.label, tr.seen = x, y, h.label, t
 
@@ -73,6 +121,10 @@ class Pincher:
                 events.append(self._event('cancel', tr, t))
             self.tracks.remove(tr)
         return events
+
+    def end(self, t: int) -> list[dict]:
+        """No more frames: cancel every pinch still held."""
+        return self.update([], t + GRACE_MS + 1)
 
     def _match(self, hands: list[Hand]) -> list[_Track | None]:
         """MediaPipe gives hands no ids, so pair each hand with the nearest track from earlier frames, closest pairs first."""
