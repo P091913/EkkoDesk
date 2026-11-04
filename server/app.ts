@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { Hono } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
-import type { Desk } from './desk.ts';
+import type { Desk, Result } from './desk.ts';
+import type { Files } from './files.ts';
 
 const local = /^(127\.0\.0\.1|localhost)(:\d+)?$/;
 const sha = (s: string) => createHash('sha256').update(s).digest();
@@ -23,18 +24,47 @@ export function pageOk(host: string | undefined, origin: string | undefined): bo
   }
 }
 
-export const createApp = (desk: Desk) =>
+const body = (c: Context) => c.req.json().catch(() => undefined);
+const reply = (c: Context, r: Result) => c.json(r.body, r.status);
+
+// Ekko's Brain. No Host check: it calls through host.docker.internal now and the Pi's tailnet name in phase 4.
+const brain: MiddlewareHandler = async (c, next) => {
+  if (!keyOk(c.req.header('x-api-key'), process.env.DESK_BRAIN_KEY)) {
+    return c.json({ ok: false, error: 'Wrong or missing X-Api-Key.' }, 401);
+  }
+  await next();
+};
+
+export const createApp = (desk: Desk, files: Files) =>
   new Hono()
-    // Loopback alone doesn't stop another page open in a browser on the Pi from calling us (CSRF, DNS rebinding):
-    // the custom header forces a CORS preflight we never approve, and the Host check rejects rebound names.
-    .use('/api/*', async (c, next) => {
+    // The page's routes. Loopback alone doesn't stop another page open in a browser on the Pi from calling us
+    // (CSRF, DNS rebinding): the custom header forces a CORS preflight we never approve, and the Host check rejects rebound names.
+    .use('/api/desk/*', async (c, next) => {
       if (c.req.header('x-desk') !== '1' || !local.test(c.req.header('host') ?? '')) {
         return c.json({ ok: false, error: 'forbidden' }, 403);
       }
       await next();
     })
-    .patch('/api/desk/widgets/:id', async (c) => {
-      const r = desk.patch(c.req.param('id'), await c.req.json().catch(() => undefined));
-      return c.json(r.body, r.status);
+    .patch('/api/desk/widgets/:id', async (c) => reply(c, desk.patch(c.req.param('id'), await body(c))))
+    .delete('/api/desk/widgets/:id', (c) => reply(c, desk.remove(c.req.param('id'))))
+    .post('/api/desk/timer', async (c) => reply(c, desk.timer(await body(c))))
+    .post('/api/desk/viewers', async (c) => {
+      const b = await body(c);
+      return reply(c, files.openListed(typeof b?.file === 'string' ? b.file : ''));
+    })
+    .get('/api/desk/files/:id', (c) => files.serve(c.req.param('id')))
+    .use('/api/notes', brain)
+    .post('/api/notes', async (c) => {
+      const b = await body(c);
+      return reply(c, desk.addNote(typeof b === 'object' && b !== null ? b.text : undefined));
+    })
+    .use('/api/files/*', brain)
+    .post('/api/files/show', async (c) => {
+      const b = await body(c);
+      const name = typeof b === 'object' && b !== null ? b.name : undefined;
+      if (typeof name !== 'string' || name.length > 60) {
+        return c.json({ ok: false, error: 'name must be text of at most 60 characters.' }, 400);
+      }
+      return reply(c, await files.show(name));
     })
     .use('/*', serveStatic({ root: './web/dist' }));

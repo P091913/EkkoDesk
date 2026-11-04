@@ -2,7 +2,7 @@
 
 A projector above the desk shows widgets on the desk surface. A camera watches your hands, and pinch gestures grab, move, resize and tap the widgets.
 
-Status: phases 1 and 2 built (2026-11-03). Phase 2 still needs the recordings and a calibration run (README). The decisions at the end are still open.
+Status: phases 1, 2 and 3 built (2026-11-03), and phase 3 checked from Telegram. Phase 2 still needs the recordings and a calibration run (README). Files on the desk (DR-40/41) is built and checked from Telegram (2026-11-04). Every decision is made (see Decisions at the end).
 
 ## Context: what already exists
 
@@ -76,19 +76,96 @@ See [PROTOCOL.md](PROTOCOL.md): tracker → desk server → page, and page → d
 
 ## Sticky-note API (for Ekko's Brain)
 
-Ekko's Brain sends `X-Api-Key`, and each caller has its own key, as in the Brain's `Api:Keys`.
+The request, the answers and the placement are in [PROTOCOL.md](PROTOCOL.md) ("Ekko's Brain → desk server").
 
-```
-POST /api/notes   {"text":"call mom about Sunday"}
-201 {"ok":true,"id":"note-7","message":"Put “call mom about Sunday” on your desk."}
-400 {"ok":false,"error":"text is required."}   or   "text is limited to 200 characters."
-409 {"ok":false,"error":"Your desk already has 30 notes. Take some off first."}
-401 {"ok":false,"error":"missing or wrong X-Api-Key"}
-```
-
-- **Placement:** a new note goes in the next free spot along the top and stays highlighted for 10 seconds, with no animation.
-- **Brain side:** `add_desk_note(text)` in a new `desk` domain, marked Reversible (dragging it to the trash undoes it). It works from Telegram, the glasses and the deck with no extra work.
+- **Brain side (done, DR-39):** `add_desk_note(text)` in the `desk` domain, marked Reversible (dragging the note to the trash undoes it). It works from Telegram, the glasses and the deck with no extra work.
 - **Later:** `GET` and `DELETE /api/notes` wait until Ekko needs "what's on my desk?" or "take that off".
+
+## Files on the desk (Ekko's DR-40)
+
+You send Ekko a photo or PDF, from Telegram now and from the deck's Chat later. Ekko keeps it in Ekko.Files on the PC (`127.0.0.1:5095`). The desk shows it when you tap it in the Files card, or when you tell Ekko "put it on my desk" or "show the invoice on my desk".
+
+**Ekko's side is done:**
+- **DR-40:** Ekko.Files, Telegram saving to it, and the Brain's `show_file_on_desk`.
+- **DR-41:** Ekko.Files also lists the photos and PDFs in the PC's Downloads folder, marked `"from": "pc"`, in the same newest-first list.
+  - So `""` means the newest file, whether you sent it or downloaded it.
+  - If a Downloads file is deleted or changed, its old id gets 404.
+
+**Keys:**
+- `FILES_URL` and `FILES_KEY` (the desk's own key to Ekko.Files) live in `.env`.
+- The page never holds `FILES_KEY`.
+- `FILES_URL` becomes the PC's tailnet address in phase 4.
+
+**Brain → desk: `POST /api/files/show {"name":"invoice"}`**
+- **Checks:**
+  - `X-Api-Key` must be `DESK_BRAIN_KEY`, otherwise 401.
+  - `name` must be a string of 0–60 characters, otherwise 400. `""` means the newest file.
+- **Lookup:** the desk asks Ekko.Files for `GET /files?q=<name>&limit=1`, or `/files?limit=1` for `""`. The timeout is 8 s, so the answer lands inside the Brain's 10 s.
+- **Card:**
+  - It opens a viewer card, or brings the one already open to the front, undocked if it was a chip.
+  - The card is highlighted for 10 s, like a new note.
+  - The answer goes back at once; the bytes are copied afterwards.
+- **Answers:** Ekko reads them out word for word (PROTOCOL.md):
+  - 200: opened.
+  - 404: no match. There are two wordings, one for when `name` is `""`.
+  - 502: the store isn't answering.
+  - 409: five files are already open.
+
+**The Files card:** a fourth default card. It's added to an existing `desk.json` on load, in the first free spot.
+- **Contents:** the last 20 files, newest first, each with its name, when it came in, and where from (`pc` shows as "PC").
+- **Refresh:** every 5 s, but only while the card is out and a page is open. Like the chat card, it's pushed to the page only when it changes.
+- **Tap:** tapping a row opens that file. Tracker taps aren't clicks, so the page finds the row with `elementFromPoint` at the tap's spot.
+- **Store down:** the card says "Ekko's file store isn't answering."
+
+**The viewer card:**
+- **Saved as:** `kind: "viewer"` with id `file-<fileId>`, saved in `desk.json` with `file`, `name`, `type` and `page`.
+- **Size and limit:** 0.3 × 0.8, at the top centre, on top of the other cards. At most 5 are open.
+- **Photos:** an `<img>`, loaded from a blob URL.
+- **PDFs:**
+  - Drawn with pdf.js (`pdfjs-dist` 6.5), loaded only when a PDF opens.
+  - **Workers:** both of pdf.js's workers are on, one parsing and one drawing, so drawing a page never stalls a drag.
+  - **Eval:** 6.5 dropped the `isEvalSupported` option. It has no eval left: its builds contain no `eval(` or `new Function(`.
+  - Only the current page is drawn, fitted to the card, with "2 / 7" under it.
+  - PDFs whose fonts aren't embedded draw with a substitute font, because the extra font files aren't bundled.
+- **Taps:**
+  - A tap on the left or right third turns the page, and the new page is saved.
+  - A failed load shows the error, and any tap on the card retries.
+  - A Downloads file that's gone before the Pi has its copy shows "That file isn't there anymore." A file the Pi already has keeps showing.
+- **Resizing:** during a resize the drawn page only stretches (CSS). It's redrawn once, when the new size is saved.
+- **Closing:** the trash takes viewers too. It removes the card and the Pi's copy, but never the file in Ekko.Files.
+
+**The bytes:**
+- **Copy on the Pi:**
+  - The desk server fetches `GET /files/{id}` from Ekko.Files and keeps the file at `data/files/<id>` (temp file, then rename).
+  - So an open file still shows when the PC is off.
+- **Serving to the page:**
+  - The page fetches `GET /api/desk/files/<id>` with the `X-Desk` header, then makes a blob URL (photos) or passes the ArrayBuffer to pdf.js (PDFs). An `<img src>` can't send `X-Desk`.
+  - That route serves only open files, with their stored type and `nosniff`.
+- **Checks:**
+  - An id must be 16 lowercase hex characters before it goes into a path or URL.
+  - Only the five types are accepted (JPEG, PNG, GIF, WebP and PDF).
+  - Anything over 20 MB is refused.
+- **Cleanup:** copies of files that are no longer open are deleted at start-up and on every desk change.
+
+**Done when:** with `npm start` running, I send the bot a PDF ("Saved “x.pdf”."), then text "put it on my desk", and it opens.
+
+**Built (2026-11-03):**
+- `server/files.ts` and its test, with a mock Ekko.Files.
+- `DELETE /api/desk/notes/:id` became `/api/desk/widgets/:id`, for notes and viewers.
+- The chat card's poll loop moved to `upstream.ts` as `poll()`, shared with the Files card.
+- On a z tie, a pinch now grabs the card drawn on top.
+
+**Checked** against a stand-in store:
+- Ekko's answers come back word for word.
+- Bytes are served with their type and `nosniff`.
+- Photos and PDFs show, and pages turn and stop at the last one.
+- A Files row opens its file.
+- A resize redraws once, when it's saved.
+- The trash closes a viewer and deletes its copy.
+- A missing Downloads file says so.
+- After a reload, the page and size come back.
+
+**Checked end to end (2026-11-04):** a PDF sent to the bot opened on the desk after "put it on my desk".
 
 ## Gestures and smoothing
 
@@ -150,6 +227,14 @@ Phases 0–3 need no new hardware.
 - Notes, the timer, and the chat card. The desk server polls `/trace` every 2 s while the chat card is out, with its own Brain key `Api__Keys__desk`.
 - Ekko's `desk` domain and DR-39 (see "Changes in EkkoHomeAgent").
 - **Done when:** "put a note on my desk: call mom" sent from Telegram appears on the desk running on the PC.
+- **Built:**
+  - `POST /api/notes` checks `DESK_BRAIN_KEY` and nothing else, since the Brain's Host is `host.docker.internal` now and the tailnet name later. The page's routes moved under `/api/desk/` with the `X-Desk` check.
+  - Notes are 0.16 × 0.2, placed in the first free spot row by row from the top, and outlined for 10 s. The trash is the strip's bottom-right corner: hold a note there 600 ms, then let go.
+  - The timer has 5, 15 and 25 minute presets along its bottom. Tapping the time pauses, resumes, or clears "done". It redraws once a second only while running, and a new note's highlight ends with one redraw, so nothing runs while the desk is still.
+  - Tracker taps aren't DOM clicks, so a tap carries where it landed in the card (0–1) and the page hit-tests with that.
+  - The chat card shows the last 10 turns, cut to 80 and 160 characters, polled only while it's out and a page is open.
+- **Checked:** with the live Brain the chat card shows real turns; a note posted with the Brain's key lands at the top; the timer starts, pauses, resumes and counts down; a quick drop on the trash docks a note, and a 600 ms hold deletes it.
+- **Checked end to end (2026-11-03):** a note asked for on Telegram appeared on the desk.
 
 ### Phase 4: the Pi's second screen (Pi plus any monitor)
 
@@ -183,8 +268,9 @@ server/app.ts                X-Desk + Host check for page routes; Host + Origin 
 server/app.test.ts
 server/desk.ts               widgets in data/desk.json: load, change, safe save (temp file + rename), push state to pages
 server/ekko.ts               polls the Brain's /trace; pushes new turns
-server/upstream.ts           copied from ekko-deck
-server/desk.test.ts
+server/upstream.ts           copied from ekko-deck, plus the poll loop the chat and Files cards share
+server/files.ts              Ekko.Files: the Files card's list, opening viewers, the Pi's copy of each open file
+server/desk.test.ts, server/ekko.test.ts, server/files.test.ts
 web/index.html               <title>Ekko Desk</title> (the labwc window rule matches it)
 web/main.tsx, web/style.css  desk and cards; redraws only on messages and drags; black background, no blur, shadows or transitions
 web/gestures.ts (+ test)     pointers → tap / drag / resize / dock / trash
@@ -202,7 +288,7 @@ tracker/recordings/          the clips the tests replay (*.jsonl.gz)
 - **API check (done in phase 1):** 1.2.0 still has the Tasks API (`mp.tasks.vision.HandLandmarker`, VIDEO mode, `detect_for_video`) with `hand_landmarks`, `hand_world_landmarks` and `handedness`. It installs OpenCV 5.0 with ArUco.
 - **Model file:** the hand model is downloaded once and kept out of git; the README says where to get it.
 
-## Changes in EkkoHomeAgent (phase 3)
+## Changes in EkkoHomeAgent (phase 3, done: DR-39 there)
 
 - `Ekko.Brain/Tools/Tool.cs`: add `Domain.Desk`.
 - `Ekko.Brain/Desk/DeskService.cs`: calls `POST /api/notes`.

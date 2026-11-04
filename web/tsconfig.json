@@ -9,7 +9,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": []
+    "types": ["vite/client"]
   },
   "include": ["."],
   "exclude": ["**/*.test.ts", "dist"]

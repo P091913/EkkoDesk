@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHIP, createGestures, type Card } from './gestures.ts';
+import { CHIP, createGestures, TRASH, type Card } from './gestures.ts';
 
 const card = (id: string, x: number, y: number, z = 1): Card => ({ id, kind: id, x, y, w: 0.2, h: 0.2, z, docked: false });
 const setup = (...extra: Card[]) => {
@@ -54,6 +54,14 @@ test('the touched card goes on top', () => {
   pointer('down', 'm1', 0.55, 0.55, 100); // on both: a is on top now, so a is grabbed
   pointer('move', 'm1', 0.65, 0.55, 150);
   near(a.x, 0.5);
+});
+
+test('on a z tie the card drawn on top (the later one) is grabbed', () => {
+  const b = card('b', 0.45, 0.45, 1); // same z as a, after it in the list
+  const { pointer } = setup(b);
+  pointer('down', 'm1', 0.5, 0.5, 0);
+  pointer('move', 'm1', 0.6, 0.5, 50);
+  near(b.x, 0.55);
 });
 
 test('two pointers resize about the centre, then the last one drags', () => {
@@ -138,4 +146,48 @@ test('held is true only while a pointer is on the card', () => {
   assert.equal(held('a'), true);
   pointer('up', 't1', 0.5, 0.5, 500);
   assert.equal(held('a'), false);
+});
+
+test('a tap says where it landed inside the card', () => {
+  const { a, pointer } = setup(); // a: 0.4–0.6 across and down
+  pointer('down', 'm1', 0.45, 0.55, 0);
+  const r = pointer('up', 'm1', 0.45, 0.55, 100);
+  assert.equal(r.tap, a);
+  near(r.at!.x, 0.25);
+  near(r.at!.y, 0.75);
+});
+
+test('a note held over the trash for 600 ms is removed; a quicker drop just docks', () => {
+  const note = { ...card('n', 0.4, 0.4), kind: 'note' };
+  const { a, pointer, trashing } = setup(note);
+  note.z = 5; // on top of `a`
+
+  pointer('down', 't1', 0.5, 0.5, 0);
+  pointer('move', 't1', 0.95, 0.95, 100);
+  assert.equal(trashing(), true);
+  const quick = pointer('up', 't1', 0.95, 0.95, 400);
+  assert.equal(quick.remove, undefined);
+  assert.equal(note.docked, true);
+  assert.ok(note.x + CHIP.w <= TRASH.x, 'docked beside the trash, not under it');
+
+  pointer('down', 't2', note.x + 0.01, note.y + 0.01, 1000);
+  pointer('move', 't2', 0.5, 0.5, 1100); // out of the strip, then back in to the trash
+  pointer('move', 't2', 0.95, 0.95, 1200);
+  pointer('move', 't2', 0.96, 0.95, 1500); // still over it: the clock doesn't restart
+  assert.equal(pointer('up', 't2', 0.96, 0.95, 1800).remove, note);
+  assert.equal(trashing(), false);
+
+  pointer('down', 't3', 0.5, 0.5, 2000); // only notes and viewers go in the trash
+  pointer('move', 't3', 0.95, 0.95, 2100);
+  assert.equal(trashing(), false);
+  assert.equal(pointer('up', 't3', 0.95, 0.95, 3000).remove, undefined);
+  assert.equal(a.docked, true);
+});
+
+test('a viewer held over the trash is removed too', () => {
+  const viewer = { ...card('v', 0.4, 0.4, 5), kind: 'viewer' };
+  const { pointer } = setup(viewer);
+  pointer('down', 't1', 0.5, 0.5, 0);
+  pointer('move', 't1', 0.95, 0.95, 100);
+  assert.equal(pointer('up', 't1', 0.95, 0.95, 800).remove, viewer);
 });
