@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { createApp, keyOk, pageOk } from './app.ts';
+import { createAsk } from './ask.ts';
 import { createDesk, type Widget } from './desk.ts';
 import { createChat } from './ekko.ts';
 import { createFiles } from './files.ts';
@@ -37,9 +38,17 @@ const desk = createDesk('data/desk.json', (widgets) => {
 });
 const files = createFiles(store, 'data/files', desk, toPages);
 files.prune(); // copies left by a crash
+// Ask Ekko: the newest tracker records the PC's microphone; what it heard goes to the Brain with the same key as the chat card,
+// and the whole answer goes into the chat card.
+const toTracker = (msg: string) => {
+  const t = [...trackers].at(-1);
+  t?.send(msg);
+  return !!t;
+};
+const ask = createAsk(brain, toTracker, toPages, chat.answer);
 
 // Loopback only: phase 4's `tailscale serve` is the one way in from the network.
-const server = serve({ fetch: createApp(desk, files).fetch, hostname: '127.0.0.1', port }, () =>
+const server = serve({ fetch: createApp(desk, files, ask).fetch, hostname: '127.0.0.1', port }, () =>
   console.log(`ekko-desk on http://127.0.0.1:${port}`),
 ) as Server;
 
@@ -57,12 +66,23 @@ server.on('upgrade', (req, socket, head) => {
       if (trackers.size === 1) toPages(status());
       ws.on('error', (e) => console.error('tracker:', e.message));
       // Passed on unchanged: the tracker is authenticated, and the page ignores what it doesn't know.
+      // Only `heard` stays here: it's for Ask Ekko.
       ws.on('message', (data, isBinary) => {
-        if (!isBinary) toPages(data.toString());
+        if (isBinary) return;
+        const text = data.toString();
+        let m: any;
+        try {
+          m = JSON.parse(text);
+        } catch {}
+        if (m?.v === 1 && m.type === 'heard') void ask.heard(m);
+        else toPages(text);
       });
       ws.on('close', () => {
         trackers.delete(ws);
-        if (trackers.size === 0) toPages(status());
+        if (trackers.size === 0) {
+          toPages(status());
+          ask.lost();
+        }
       });
     });
   } else if (path === '/ws/page' && pageOk(req.headers.host, req.headers.origin)) {
@@ -72,6 +92,7 @@ server.on('upgrade', (req, socket, head) => {
       ws.send(state(desk.widgets()));
       ws.send(chat.latest());
       ws.send(files.latest());
+      ws.send(ask.latest());
       watch();
       ws.on('error', (e) => console.error('page:', e.message));
       ws.on('close', () => {

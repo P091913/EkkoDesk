@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import pdfRenderer from 'pdfjs-dist/build/pdf.renderer.min.mjs?url';
@@ -15,6 +15,8 @@ const { pointer, wheel, held, trashing } = createGestures(() => cards);
 const pinches = new Map<string, { x: number; y: number }>(); // live tracker pinches, drawn as rings
 let chat: { turns: Turn[]; error?: string } = { turns: [] };
 let fileList: { files: StoreFile[]; error?: string } = { files: [] };
+// Ask Ekko, from the server's `ask` messages: what the chat card's button shows, and why the last question failed.
+let asking: { state: string; note: string | null } = { state: 'idle', note: null };
 const shown = new Map<string, Shown>();
 // Each card's size as last saved. A PDF page is redrawn when it changes: once a resize ends, not all through it.
 let settled = new Map<string, string>();
@@ -91,8 +93,15 @@ const mmss = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
+// Tracker taps aren't clicks, so what's under a tap is found from where it landed on the page.
+function under(c: Card, at: { x: number; y: number }, selector: string) {
+  const b = box(c);
+  return document.elementFromPoint((b.x + at.x * b.w) * innerWidth, (b.y + at.y * b.h) * innerHeight)?.closest<HTMLElement>(selector);
+}
+
 // Timer: a preset starts it; the time pauses, resumes, or clears "done". Files: a row opens that file.
 // Viewer: the left or right third turns the page (saved with the tap); a tap on a failed file tries again.
+// Chat: the Ask Ekko button starts listening, and a second tap sends. A tap on the turns pages down, then back to the top.
 function tapped(c: Card, at: { x: number; y: number }) {
   if (c.docked) return;
   if (c.kind === 'timer') {
@@ -102,9 +111,15 @@ function tapped(c: Card, at: { x: number; y: number }) {
     if (mode === 'running') timer({ action: 'pause' });
     else if (mode === 'paused') timer({ action: 'start' });
     else if (mode === 'done') timer({ action: 'reset' });
+  } else if (c.kind === 'chat') {
+    if (under(c, at, '[data-ask]')) return api('POST', '/api/desk/ask', { action: asking.state === 'listening' ? 'stop' : 'start' });
+    // Text is sized from the card, so a bigger card doesn't fit more of a long answer: pages do.
+    const list = under(c, at, '.card')?.querySelector<HTMLElement>('.turns');
+    if (!list) return;
+    list.scrollTop = list.scrollTop + list.clientHeight >= list.scrollHeight - 1 ? 0 : list.scrollTop + list.clientHeight * 0.8;
+    redraw(); // shows or hides "tap for more"
   } else if (c.kind === 'files') {
-    const b = box(c); // the row under the tap, found from where it landed on the page
-    const row = document.elementFromPoint((b.x + at.x * b.w) * innerWidth, (b.y + at.y * b.h) * innerHeight)?.closest<HTMLElement>('[data-file]');
+    const row = under(c, at, '[data-file]');
     if (row) api('POST', '/api/desk/viewers', { file: row.dataset.file });
   } else if (c.kind === 'viewer') {
     const s = shown.get(c.file!);
@@ -206,6 +221,9 @@ function connect() {
     } else if (m?.type === 'turns' && Array.isArray(m.turns)) {
       chat = { turns: m.turns, error: typeof m.error === 'string' ? m.error : undefined };
       redraw();
+    } else if (m?.type === 'ask' && typeof m.state === 'string') {
+      asking = { state: m.state, note: typeof m.note === 'string' ? m.note : null };
+      redraw();
     } else if (m?.type === 'files' && Array.isArray(m.files)) {
       fileList = { files: m.files, error: typeof m.error === 'string' ? m.error : undefined };
       redraw();
@@ -278,6 +296,48 @@ function PdfPage({ pdf, page, size }: { pdf: PDFDocumentProxy; page: number; siz
   return <canvas ref={ref} />;
 }
 
+// The chat card's turns, newest first, paged by taps (see tapped). Back to the top when a new turn comes in,
+// and "tap for more" while some of it is below the card's edge.
+function Turns({ font }: { font: { fontSize: string } }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const newest = useRef<string | undefined>(undefined);
+  const [more, setMore] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current!;
+    if (chat.turns[0]?.id !== newest.current) {
+      newest.current = chat.turns[0]?.id;
+      el.scrollTop = 0;
+    }
+    const below = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+    if (below !== more) setMore(below);
+  });
+  return (
+    <>
+      <div class="turns" ref={ref} style={font}>
+        {chat.error && <p class="muted">{chat.error}</p>}
+        {!chat.error && chat.turns.length === 0 && <p class="muted">No messages yet.</p>}
+        {chat.turns.map((t) => (
+          <div key={t.id} class={`turn ${t.state}`}>
+            <div class="said">
+              <b>{t.said ?? '…'}</b>
+              <time>{hhmm(t.at)}</time>
+            </div>
+            <div class="ans">{t.state === 'run' ? 'working…' : (t.reply ?? '')}</div>
+            <div class="via">{t.channel}</div>
+          </div>
+        ))}
+      </div>
+      {more && (
+        <div class="more" style={font}>
+          tap for more
+        </div>
+      )}
+    </>
+  );
+}
+
+const ASK_LABEL: Record<string, string> = { listening: 'Listening… tap to send', working: 'Working on it…', thinking: 'Ekko is thinking…' };
+
 // Written as big as fits, like on paper: a short note gets big writing, a long one shrinks to 12 px and is then cut off.
 // The area each character needs is about 0.5 em wide by 1.3 em tall, plus room for word wrapping.
 function noteFont(text: string, b: { w: number; h: number }) {
@@ -307,21 +367,15 @@ function Body({ c, b }: { c: Card; b: { w: number; h: number } }) {
     );
   }
   if (c.kind === 'chat') {
+    const font = { fontSize: `${b.w * 5}vw` };
     return (
-      <div class="turns" style={{ fontSize: `${b.w * 5}vw` }}>
-        {chat.error && <p class="muted">{chat.error}</p>}
-        {!chat.error && chat.turns.length === 0 && <p class="muted">No messages yet.</p>}
-        {chat.turns.map((t) => (
-          <div key={t.id} class={`turn ${t.state}`}>
-            <div class="said">
-              <b>{t.said ?? '…'}</b>
-              <time>{hhmm(t.at)}</time>
-            </div>
-            <div class="ans">{t.state === 'run' ? 'working…' : (t.reply ?? '')}</div>
-            <div class="via">{t.channel}</div>
-          </div>
-        ))}
-      </div>
+      <>
+        <Turns font={font} />
+        <div class={`ask ${asking.state}`} data-ask style={font}>
+          <b>{ASK_LABEL[asking.state] ?? 'Ask Ekko'}</b>
+          {asking.note && <span>{asking.note}</span>}
+        </div>
+      </>
     );
   }
   if (c.kind === 'files') {

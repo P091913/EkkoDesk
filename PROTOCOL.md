@@ -4,12 +4,14 @@ The tracker (PC) and the desk server and page (Pi) are updated separately, so ev
 
 ## Tracker → desk server
 
-The tracker connects to `/ws/tracker` with `X-Api-Key` on the WebSocket upgrade (the `DESK_TRACKER_KEY` value). A missing or wrong key gets HTTP 403. The server passes these messages on unchanged to every open desk page; a message over 1 MB closes the connection.
+The tracker connects to `/ws/tracker` with `X-Api-Key` on the WebSocket upgrade (the `DESK_TRACKER_KEY` value). A missing or wrong key gets HTTP 403. The server passes these messages on unchanged to every open desk page, except `heard`, which is for the server itself. A message over 1 MB closes the connection.
 
 ```jsonc
 {"v":1,"type":"pointer","phase":"down","id":41,"hand":"right","x":0.412,"y":0.661,"t":1762190000123}
 {"v":1,"type":"calibrate","png":"<base64 1280x720 PNG>"}   // show full screen, on top of everything
 {"v":1,"type":"calibrate","png":null}                       // hide it
+{"v":1,"type":"heard","text":"Put a note on my desk, buy milk."}   // Ask Ekko: what speaches heard ("" for silence)
+{"v":1,"type":"heard","error":"I can't open the PC's microphone."} // or why there's nothing
 ```
 
 - **`phase`:** `down`, `move`, `up`, or `cancel` (the hand was lost mid-pinch).
@@ -21,6 +23,23 @@ The tracker connects to `/ws/tracker` with `X-Api-Key` on the WebSocket upgrade 
 - **`t`:** the tracker's clock, in ms. Only the gaps between events are used, because the PC and Pi clocks differ.
 - **`move`** is sent only while pinched, only when the point moved, and at most once per camera frame.
   - There's no hover stream: your fingertip is the cursor, and a hover stream would make the Pi redraw constantly.
+- **`heard`** answers a `listen` (below), once per question.
+  - The recording is sent to speaches on the PC: `POST /v1/audio/transcriptions`, as Ekko's glasses and Telegram do.
+  - The tracker's `--speech` and `--speech-model` settings default to `http://127.0.0.1:8000` and `Systran/faster-distil-whisper-small.en`.
+  - `error` is one of "I can't open the PC's microphone." or "I couldn't transcribe that right now."
+
+## Desk server → tracker
+
+Sent on the same WebSocket, to the newest tracker only. The tracker ignores anything else.
+
+```jsonc
+{"v":1,"type":"listen","on":true}    // start recording the PC's default microphone
+{"v":1,"type":"listen","on":false}   // stop, and send back `heard`
+```
+
+- **Recording:** the tracker stops by itself after 15 s, and still sends `heard`.
+- **Format:** 16-bit mono at the microphone's own rate; speaches resamples it.
+- **Privacy:** the audio stays in memory and is never written to disk.
 
 ## Desk server → page
 
@@ -36,6 +55,7 @@ The page connects to `/ws/page`, localhost only. Browsers can't add a custom hea
                             "file":"0123456789abcdef","name":"invoice.pdf","type":"application/pdf","page":1,"added":1793755105248}]}
 {"type":"turns","turns":[{"id":"…","channel":"telegram","at":"2026-11-03T18:24:00Z","said":"…","reply":"…","state":"ok"}],"error":"Ekko unavailable"}
 {"type":"files","files":[{"id":"0123456789abcdef","name":"invoice.pdf","type":"application/pdf","from":"pc","at":"2026-11-03T18:00:00Z"}],"error":"Ekko's file store isn't answering."}
+{"type":"ask","state":"listening","note":null}
 ```
 
 - **`state`:** the full state goes out on connect and after every change. A few dozen widgets is tiny, so there's no diffing.
@@ -48,13 +68,30 @@ The page connects to `/ws/page`, localhost only. Browsers can't add a custom hea
     - `added` is when it was last shown. The page highlights it for 10 s, like a new note.
   - **The Files card** (`files`) has only the layout fields. Its contents come in `files`.
 - **`turns`:** the chat card's last 10 turns from Ekko's `/trace`, newest first, sent on connect and when they change.
-  - `state` is `run`, `ok` or `err`. `said` is cut to 80 characters and `reply` to 160, ending in "…", so one turn can't fill the card.
+  - `state` is `run`, `ok` or `err`. `said` is cut to 80 characters, ending in "…".
+  - `reply` is what `/trace` gives: Ekko keeps only its first line, cut to 160 characters.
+  - For a question asked from the desk, `reply` is instead the whole answer from `/message`, line breaks kept, up to 2000 characters. That way an approval question can be read in full before you answer it.
+  - The page shows replies whole. A tap on the turns pages down, and back to the top after the last page.
   - `error` is there only while Ekko can't be reached; the last turns stay.
   - The server polls `/trace` every 2 s with `EKKO_KEY`, only while the chat card is out and a page is open.
 - **`files`:** the Files card's last 20 files from Ekko.Files, newest first, sent on connect and when they change.
   - `from` is `telegram`, `deck` or `pc` (the PC's Downloads folder, DR-41). The page shows `pc` as "PC".
   - While the store can't be reached, the list is empty and `error` is set.
   - The server polls `GET /files?limit=20` every 5 s with `FILES_KEY`, only while the Files card is out and a page is open.
+- **`ask`:** the chat card's Ask Ekko button, sent on connect and whenever it changes.
+  - `state` is `idle`, `listening`, `working` (transcribing) or `thinking` (the Brain has the question).
+  - `note` says why the last question failed, or is null. It's one of:
+    - "The tracker isn't running, so I can't hear you."
+    - the tracker's `heard` error;
+    - "I didn't catch that." (silence: not sent, since the Brain would answer 400, which never reaches `/trace`)
+    - "That's longer than Ekko takes in one message." (over 500 characters)
+    - "I couldn't transcribe that right now." (no `heard` within 90 s)
+    - "Ekko couldn't take that: <the Brain's error>." (a 400)
+    - "Ekko refused the desk's key, so I couldn't pass that on." (a 401)
+    - "Ekko isn't answering." (anything else)
+  - **The question** goes to the Brain's `POST /message` with `EKKO_KEY`: `{"text":…,"channel":"desk","conversationId":"desk"}`. This is DR-42 on Ekko's side.
+  - **The answer:** the Brain answers `{"text":…,"requestId":…}`. The whole text goes into that turn's `reply` in `turns`.
+  - **Approvals:** a server-ops run asked for from the desk waits in the `desk` conversation. Saying "approve" or "deny" through Ask Ekko answers it.
 - When the tracker disconnects, the page cancels its live pinches, since no `up` will come, and hides the calibration image.
 
 ## Page → desk server
@@ -68,6 +105,8 @@ Plain HTTP under `/api/desk/`, behind the `X-Desk` check (header `X-Desk: 1` and
   - `{"action":"pause"}` and `{"action":"reset"}`.
 - `DELETE /api/desk/widgets/:id`: notes and viewers only. Removing a viewer deletes the Pi's copy of its file, never the file in Ekko.Files.
 - `POST /api/desk/viewers` `{"file":"<id>"}`: opens a file from the Files card's list, like `/api/files/show`.
+- `POST /api/desk/ask` `{"action":"start"}` or `{"action":"stop"}`: Ask Ekko. It answers `{"ok":true}`, and how it went comes as `ask` messages.
+  - A start while not idle, or a stop while not listening, changes nothing.
 - `GET /api/desk/files/:id`: the bytes of an open viewer's file, with its stored `Content-Type` and `X-Content-Type-Options: nosniff`.
   - An `<img src>` can't send `X-Desk`, so the page fetches the bytes and uses a blob URL (photos) or the ArrayBuffer (pdf.js).
   - The server copies the file from Ekko.Files to `data/files/<id>` the first time, so it still shows with the PC off.

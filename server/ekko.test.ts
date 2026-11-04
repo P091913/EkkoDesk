@@ -28,6 +28,21 @@ test('turnsOf: one turn per message, newest first, long text cut short', () => {
   assert.equal(turnsOf([ev(1, 'c', 'request')], NOW + 600_000)[0].state, 'err'); // no reply after 5 minutes
 });
 
+test('a desk question shows its whole answer, even before /trace has the reply line', () => {
+  const long = `Restart the media server? It will drop two streams.\n${'z'.repeat(200)}\nSay approve or deny.`;
+  const full = new Map([['d', long]]);
+  const asked = [ev(1, 'd', 'request', { text: 'restart the media server', channel: 'desk' })];
+  const [early] = turnsOf(asked, NOW, full);
+  assert.deepEqual([early.state, early.reply], ['ok', long]);
+  const [later] = turnsOf([...asked, ev(2, 'd', 'reply', { text: 'Restart the media server? It will drop two streams.' })], NOW, full);
+  assert.equal(later.reply, long); // /trace's one cut line doesn't replace it
+
+  const pushed: any[] = [];
+  const chat = createChat(async () => ({ status: 200, body: { boot: 'b1', events: [] } }), (m) => pushed.push(JSON.parse(m)));
+  chat.answer('x', 'y'.repeat(3000)); // no turn for it yet: nothing new to show, so nothing pushed
+  assert.equal(pushed.length, 0);
+});
+
 test('the chat pushes only changes, reports Ekko down, and starts over when Ekko restarts', async () => {
   const replies: Result[] = [];
   const asked: string[] = [];

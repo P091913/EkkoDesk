@@ -8,9 +8,10 @@ import { createDesk, type Desk } from './desk.ts';
 import { createFiles } from './files.ts';
 
 // Ekko.Files isn't configured here: these tests stop at the checks in front of it (files.test.ts mocks the store).
-const createApp = (desk: Desk) => {
+// Ask Ekko is recorded, not run (ask.test.ts covers it).
+const createApp = (desk: Desk, asked: string[] = []) => {
   const dir = join(mkdtempSync(join(tmpdir(), 'desk-')), 'files');
-  return app2(desk, createFiles({ name: 'Ekko.Files' }, dir, desk, () => {}));
+  return app2(desk, createFiles({ name: 'Ekko.Files' }, dir, desk, () => {}), { start: () => asked.push('start'), stop: () => asked.push('stop') });
 };
 
 test('keyOk needs a configured key and an exact match', () => {
@@ -70,6 +71,18 @@ test('/api/files/show needs the Brain key and a name of at most 60 characters', 
   for (const bad of ['{}', '{"name":5}', `{"name":"${'x'.repeat(61)}"}`, 'not json']) assert.equal((await post(key, bad)).status, 400, bad);
   const r = await post(key, `{"name":"${'x'.repeat(60)}"}`); // passes the checks, then finds no store
   assert.deepEqual([r.status, (await r.json()).error], [502, "Ekko's file store isn't answering, so I can't open that."]);
+});
+
+test('Ask Ekko is for the page only, and takes start or stop', async () => {
+  const asked: string[] = [];
+  const app = createApp(createDesk(join(mkdtempSync(join(tmpdir(), 'desk-')), 'desk.json'), () => {}), asked);
+  const post = (headers: Record<string, string>, body: string) =>
+    app.request('/api/desk/ask', { method: 'POST', headers: { 'content-type': 'application/json', host: '127.0.0.1:8081', ...headers }, body });
+  assert.equal((await post({}, '{"action":"start"}')).status, 403);
+  for (const bad of ['{}', '{"action":"go"}', 'not json']) assert.equal((await post({ 'x-desk': '1' }, bad)).status, 400, bad);
+  assert.equal((await post({ 'x-desk': '1' }, '{"action":"start"}')).status, 200);
+  assert.equal((await post({ 'x-desk': '1' }, '{"action":"stop"}')).status, 200);
+  assert.deepEqual(asked, ['start', 'stop']);
 });
 
 test('file bytes are for the page only, and only for open files', async () => {
