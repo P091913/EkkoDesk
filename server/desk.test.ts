@@ -35,7 +35,7 @@ test('an unreadable file is kept aside, not overwritten', () => {
   writeFileSync(file, '{"widgets": [trunc');
   const desk = createDesk(file, () => {});
   assert.equal(readFileSync(`${file}.bad`, 'utf8'), '{"widgets": [trunc');
-  assert.deepEqual(desk.widgets().map((w) => w.id), ['chat', 'timer', 'files']);
+  assert.deepEqual(desk.widgets().map((w) => w.id), ['chat', 'timer', 'files', 'today']);
 });
 
 test('notes land in the first free spot along the top, above the strip', () => {
@@ -43,6 +43,7 @@ test('notes land in the first free spot along the top, above the strip', () => {
   desk.patch('chat', { docked: true });
   desk.patch('timer', { docked: true });
   desk.patch('files', { docked: true });
+  desk.patch('today', { docked: true });
   const spots = Array.from({ length: 21 }, (_, i) => {
     desk.addNote(`note ${i}`);
     const n = desk.widgets().at(-1)!;
@@ -105,13 +106,23 @@ test('timer: start, pause, resume, reset, and it survives a restart', () => {
   assert.deepEqual([timer().endsAt, timer().leftMs], [null, null]);
 });
 
-test('a desk saved before the Files card gets it in a free spot, on top', () => {
+test('a desk saved before the Files and Today cards gets them in their own spots if free, else free ones, on top', () => {
   const file = tempFile();
-  createDesk(file, () => {}).patch('chat', { z: 7 }); // writes chat, timer and files
-  const old = JSON.parse(readFileSync(file, 'utf8'));
-  writeFileSync(file, JSON.stringify({ widgets: old.widgets.filter((w: { id: string }) => w.id !== 'files') }));
-  const files = createDesk(file, () => {}).widgets().find((w) => w.id === 'files')!;
-  assert.deepEqual([files.kind, +files.x.toFixed(2), files.y, files.z], ['files', 0.46, 0.02, 8]);
+  const desk = createDesk(file, () => {});
+  desk.patch('chat', { z: 7 }); // writes chat, timer, files and today
+  const without = (...ids: string[]) => {
+    const old = JSON.parse(readFileSync(file, 'utf8'));
+    writeFileSync(file, JSON.stringify({ widgets: old.widgets.filter((w: { id: string }) => !ids.includes(w.id)) }));
+    return createDesk(file, () => {}).widgets();
+  };
+  let widgets = without('files', 'today');
+  const at = (id: string) => widgets.filter((w) => w.id === id).map((w) => [+w.x.toFixed(2), +w.y.toFixed(2), w.z])[0];
+  assert.deepEqual([at('files'), at('today')], [[0.7, 0.32, 8], [0.05, 0.56, 9]]);
+
+  desk.addNote('call mom'); // a note on the Files card's spot sends it to the first free one
+  desk.patch(desk.widgets().at(-1)!.id, { x: 0.72, y: 0.4 });
+  widgets = without('files');
+  assert.deepEqual(at('files'), [0.46, 0.02, 9]);
 });
 
 test('viewers: open, bring back to the front, at most five, page saved, removed', () => {

@@ -6,12 +6,16 @@ import { createAsk } from './ask.ts';
 import { createDesk, type Widget } from './desk.ts';
 import { createChat } from './ekko.ts';
 import { createFiles } from './files.ts';
+import { createToday } from './today.ts';
 import { call } from './upstream.ts';
 
 const port = Number(process.env.PORT ?? 8081);
 if (!process.env.DESK_TRACKER_KEY) console.warn('DESK_TRACKER_KEY is not set: every tracker will be refused');
 if (!process.env.DESK_BRAIN_KEY) console.warn('DESK_BRAIN_KEY is not set: Ekko can not add notes or show files');
 if (!process.env.FILES_URL || !process.env.FILES_KEY) console.warn('FILES_URL or FILES_KEY is not set: the desk can not show files');
+if (!process.env.FOOD_URL || !process.env.FOOD_KEY || !process.env.BUDGET_URL || !process.env.BUDGET_KEY) {
+  console.warn('FOOD_URL, FOOD_KEY, BUDGET_URL or BUDGET_KEY is not set: the Today card can not show them');
+}
 
 const trackers = new Set<WebSocket>();
 const pages = new Set<WebSocket>();
@@ -25,10 +29,17 @@ const toPages = (msg: string) => pages.forEach((p) => p.send(msg));
 const brain = { name: 'Ekko', base: process.env.EKKO_URL, key: process.env.EKKO_KEY };
 const store = { name: 'Ekko.Files', base: process.env.FILES_URL, key: process.env.FILES_KEY };
 const chat = createChat((path) => call(brain, path), toPages);
+// The Today card reads Ekko.Food and Ekko.Budget with the desk's own keys; the budget key is read-only on Ekko's side.
+const today = createToday(
+  { name: 'Ekko.Food', base: process.env.FOOD_URL, key: process.env.FOOD_KEY },
+  { name: 'Ekko.Budget', base: process.env.BUDGET_URL, key: process.env.BUDGET_KEY },
+  toPages,
+);
 const out = (kind: string) => pages.size > 0 && desk.widgets().some((w) => w.kind === kind && !w.docked);
 const watch = () => {
   chat.set(out('chat'));
   files.set(out('files'));
+  today.set(out('today'));
 };
 
 const desk = createDesk('data/desk.json', (widgets) => {
@@ -48,7 +59,7 @@ const toTracker = (msg: string) => {
 const ask = createAsk(brain, toTracker, toPages, chat.answer);
 
 // Loopback only: phase 4's `tailscale serve` is the one way in from the network.
-const server = serve({ fetch: createApp(desk, files, ask).fetch, hostname: '127.0.0.1', port }, () =>
+const server = serve({ fetch: createApp(desk, files, ask, today).fetch, hostname: '127.0.0.1', port }, () =>
   console.log(`ekko-desk on http://127.0.0.1:${port}`),
 ) as Server;
 
@@ -93,6 +104,7 @@ server.on('upgrade', (req, socket, head) => {
       ws.send(chat.latest());
       ws.send(files.latest());
       ws.send(ask.latest());
+      ws.send(today.latest());
       watch();
       ws.on('error', (e) => console.error('page:', e.message));
       ws.on('close', () => {

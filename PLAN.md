@@ -2,7 +2,7 @@
 
 A projector above the desk shows widgets on the desk surface. A camera watches your hands, and pinch gestures grab, move, resize and tap the widgets.
 
-Status: phases 1, 2 and 3 built (2026-11-03), and phase 3 checked from Telegram. Phase 2 still needs the recordings and a calibration run (README). Files on the desk (DR-40/41) is built and checked from Telegram (2026-11-04). Ask Ekko by voice is built and checked end to end (2026-11-04). Every decision is made (see Decisions at the end).
+Status: phases 1, 2 and 3 built (2026-11-03), and phase 3 checked from Telegram. Phase 2 still needs the recordings and a calibration run (README). Files on the desk (DR-40/41) is built and checked from Telegram (2026-11-04). Ask Ekko by voice is built and checked end to end (2026-11-04). The Today card and quick food log (DR-43) are built (2026-11-04) and need their test with the live services. The toys (a ball and two fighters) are built (2026-11-04) and need watching on a real screen. Every decision is made (see Decisions at the end).
 
 ## Context: what already exists
 
@@ -243,6 +243,162 @@ An **Ask Ekko** button along the bottom of the chat card. Tap it, speak, tap aga
 
 **Checked end to end (2026-11-04):** with the real microphone and the real Brain, "put a note on my desk: buy milk" said through Ask Ekko put the note on the desk.
 
+## Today card and quick food log (Ekko's DR-43)
+
+Ekko's side is built: the desk reads Ekko.Food and Ekko.Budget directly, with its own keys. The desk server holds them, never the page.
+- `FOOD_URL` and `BUDGET_URL` are `http://127.0.0.1:5085` and `:5080` on the PC, and the PC's tailnet name in phase 4.
+- The keys are Ekko's `Food_DeskKey` and `Budget_DeskKey`. The budget key is read-only: anything but GET gets 403.
+
+**Today card** (a fifth default card, at 0.05, 0.56, 0.25 × 0.32; an existing desk gets it there if that spot is free):
+- **What it shows:**
+  - calories so far, big ("1,240 cal");
+  - the usual foods as buttons;
+  - "3 bills left · $1,850.00 to pay";
+  - "Next: Rent $1,200.00, due Nov 5". Past its date it's "overdue since Nov 1", in red.
+  - With no tab for this month, or Google failing, Ekko's own sentence shows instead.
+- **Refresh:** only while the card is out and a page is open.
+  - Food every 2 minutes, because it also changes through Ekko and Telegram.
+  - The budget is kept on the server and read at most every 10 minutes, because each glance reads the Google Sheet.
+  - A tap on the card away from its buttons reads everything at once.
+
+**Quick food log:** up to 6 usual foods (`/food/usual?limit=6`).
+- **A tap** logs one through `/food/log`. Ekko's message shows with an Undo button for 10 s, and the total updates.
+- **Taps:** a second tap while one is on its way is dropped, because tracker taps can misfire.
+- **Checks on the server:**
+  - only names in the current usual list are logged;
+  - Undo is allowed once, within 15 s of the desk's own log, because `/food/undo` takes off today's last entry whoever logged it.
+- **After that,** "undo that" said to Ekko still works.
+- **With no usual foods yet:** "Log food with Ekko and your usual foods show up here."
+
+**Done when** (Ekko's list; the ball is under Toys):
+- the Today card shows today's calories and the next bill from the live services;
+- after a food is logged through Ekko, it shows as a button, and a tap logs it, updates the total and can be undone;
+- the ball can be thrown and settles.
+
+**Built (2026-11-04):**
+- **Server:** `server/today.ts` and its test (mock food and budget services); Today added to the default cards.
+  - A default card missing from an older desk now goes to its own spot when that's free, and to the first free spot only when it isn't.
+- **Page:** the Today card in `web/main.tsx`.
+
+**Checked** on a test desk with stand-in food and budget services:
+- The card showed 1,240 cal, four foods, "3 bills left · $1,850.00 to pay" and the overdue rent in red.
+- Coffee logged (1,245, Undo shown), and Undo took it off (1,240).
+- The live services answered the desk's keys (food "empty", budget "ok"), and refused a call without one (401).
+
+**Still to do:** the done-when with the live services.
+
+## Toys: a ball and two fighters
+
+Things to play with while thinking, on the page alone: nothing about them goes to the server, and nothing is saved.
+- **Their spots:** at the left end of the strip, as the trash is at the right. "ball" (0–0.08), then "fight" (0.08–0.16). Chips don't dock over them.
+- **Who gets a pointer:** the ball first (the smaller target), then a figure, then the spots, then the cards.
+
+**The shared physics** (`web/physics.ts`):
+- **Bodies are circles.** Gravity pulls them toward the bottom of the page, assumed to be your side; if the projector's the other way round, it's one setting.
+- **The floor** is the top of the strip, so nothing sits on chips or the trash.
+- **Bounces:** off the page's edges and off cards, keeping part of their speed. Slower bounces just stop, so nothing hops forever.
+- **Friction** brings them to rest.
+- **Card tops:** things can rest on top of a card, and fall when it's moved away.
+- **Fixed 1/120 s steps** carry leftover time between frames, so the path is the same at any frame rate.
+- **Throws** take their speed from the hand's last 100 ms, so a hand held still first just drops what it holds. The fastest throw is 8 page heights a second.
+
+**The ball** (`web/ball.ts`):
+- A tap on its spot brings it out with a small hop, or puts it away.
+- It keeps 60% of its speed per bounce.
+
+**The fighters** (`web/fighters.ts`):
+- **Two stick figures,** blue and red, 0.14 of the page high, fighting on their own. For collisions each one is a circle of radius 0.05, and the figure is drawn standing on its bottom edge.
+- **What they do:**
+  - They walk at each other, at 0.38 page heights a second.
+  - **Punches and kicks:** a punch knocks back less, and a kick can floor a figure (45%).
+  - **Knocked flying,** a figure bounces off cards and the page's edges like the ball, skids, and gets its balance back.
+  - **Down:** it lies for a second, then gets up.
+  - **No hitting someone who's down.**
+- **Ragdoll** (`web/ragdoll.ts`): hit, knocked down, grabbed or thrown, a figure goes limp.
+  - Its 11 joints become loose points joined by fixed-length bones (Verlet, 8 passes a step), swinging under gravity.
+  - The hip is pulled along by the body's circle; the joints are kept out of cards and above the floor.
+  - Its limbs start a little behind the body, so a knock makes them flop.
+  - Coming out of it, it eases back to standing: 0.5 s getting up, 0.25 s after a flinch.
+  - At the moment of a hard knock a bone can stretch up to about 30%, and it's back to length within a few steps.
+- **Climbing:**
+  - **Any card can be climbed:** notes, viewers, the chat, timer, Files and Today cards.
+  - **Starting a climb:** a figure that walks or jumps into a card's side climbs it, at 0.4 page heights a second, and steps onto the top.
+  - **What it holds onto:** the card itself, by id, so it moves with a dragged card and lets go if the card goes.
+  - **Room on top:** it only climbs if there's room to stand up there, inside the page and with no other card in the way. Otherwise it tries to jump over now and then.
+  - **On the default layout nothing is climbable:** the chat card sits right over Today, and the timer right over Files.
+- **Getting around:**
+  - **Up to the other one:** when the other figure is up on a card, a figure goes to the card's nearer side and climbs, or jumps if the card's bottom is above its head.
+  - **Down to the other one:** from a card, it walks off the end toward the other figure.
+  - **The high ground:** after taking a hit, 30% of the time it heads for the nearest card it can climb.
+  - **Holding a card:** whoever has just climbed a card waits up there 1.5 s for the other one, and never walks off while the other is climbing up. Without that they chased each other up and down a note every couple of seconds.
+  - **Stuck:** trying to move for 2 s without getting anywhere, it turns round and goes the other way for a while.
+  - **Turning:** it only turns when the other figure is clearly to one side, so it doesn't spin on the spot right above or below it.
+- **Fair fights:**
+  - Both figures decide, then both move, and hits in the same step land together.
+  - Before that, the left figure won 6 fights out of 6, and later the right figure got the first blow more often.
+- **Rounds:**
+  - The first down 3 times loses, and stays down; the winner raises both arms, and goes back to that pose if it was hit in the same moment.
+  - A round lasts 60 s at most.
+- **In 40 simulated fights per layout:**
+
+  | Layout | Left won | Right won | Out of time | Median | Knocked into a card | Climbs |
+  |---|---|---|---|---|---|---|
+  | Empty desk | 20 | 12 | 8 | 42 s | 0 | 0 |
+  | Default cards | 21 | 17 | 2 | 30 s | 17 a fight | 0 |
+  | Plus a note in the middle | 13 | 24 | 3 | 35 s | 25 a fight | 10 a fight |
+  | Notes as steps | 21 | 18 | 1 | 32 s | 36 a fight | 7 a fight |
+
+  - Joints never went into a card or below the floor.
+  - A made-up layout whose gaps are all narrower than a figure (0.071 against 0.1) trapped them, and every round ran out of time.
+- **The fight spot:**
+  - A tap brings them out and starts a round. After a round it says "again", and a tap starts the next.
+  - Holding it 600 ms puts them away, the same hold as the trash.
+- **You and the ball:**
+  - **Grab and throw:** grab a figure with a pinch or the mouse; it hangs limp from your hand. Throw it, and it flies limp, lands and recovers.
+  - **The ball hits them:** they bounce apart by mass (a figure is 3 times the ball), and the figure takes the knock. It flinches from 0.6 page heights a second, and goes down from 2.2.
+- **Drawing:** each figure is one SVG path (body, arms, legs) and a filled head. It's posed for standing, walking, climbing, punching, kicking and winning, and drawn from the ragdoll while limp.
+
+**The Pi:** these break the "no continuous animation" rule, on purpose and within limits. CLAUDE.md records the exception.
+- **When frames run:** only while a toy moves, meaning from a throw until the ball rests, or through a round until both figures stand still.
+- **Drawing each frame:** the ball is one circle moved with a transform, and each fighter is one path and one circle updated directly, all outside Preact.
+- **At rest:** no frames at all.
+
+**Done when:**
+- the ball can be thrown and settles;
+- the fighters fight a round to a knockout or the time limit, and the frames stop;
+- the ball knocks a figure back;
+- a knocked figure goes limp, and they climb cards after each other.
+
+**Built (2026-11-04):**
+- **Shared code:** `web/physics.ts` (taken out of `ball.ts`), `web/ball.ts`, `web/fighters.ts`, `web/ragdoll.ts`, and `web/toys.ts`, which runs them in the same steps so the ball can hit the figures.
+- **Spots:** `BALL_SPOT` and `FIGHT_SPOT` in `web/gestures.ts`.
+- **Tests:** `ball.test.ts` (unchanged after the physics moved) and `fighters.test.ts`:
+  - the start of a round;
+  - a whole round to the end, with the frames stopping;
+  - a knock into a card;
+  - grab, throw and put away;
+  - the same fight at 30 and 120 frames a second;
+  - the ball hitting a figure;
+  - a pose standing on the floor;
+  - going limp: in one piece, out of cards and the floor, then back up;
+  - climbing after the other one, and not climbing a card with no room on top.
+- **Config:** `web/tsconfig.json` allows `.ts` imports, so these modules run under both Vite and `node --test`.
+
+**Checked** on a test desk:
+- **The ball:**
+  - it came out and was thrown;
+  - it bounced off the timer card and the top edge, then rolled along the strip line to rest;
+  - at rest it asked for no frames in 4 s;
+  - the spot put it away.
+- **The fighters:**
+  - they came out facing each other on the strip line, with "fighting" and "hold: away" in their spot, and closed in;
+  - the poses were drawn side by side and checked (idle, walk, punch, kick, hurt, down, getting up, win). Lying and getting up are lifted so nothing dips below the floor.
+- **In simulation,** about 20 knocks into the Today and Files cards per fight.
+
+**Still to do:** watching a whole round on a real screen, and on the Pi. Chrome ran the automated tab at 1–2 frames a second, so a round would have taken minutes there. The ragdoll and climbing are checked in simulation and tests only, not on screen.
+
+## Gestures and smoothing
+
 ## Gestures and smoothing
 
 **In the page (`web/gestures.ts`):**
@@ -347,10 +503,16 @@ server/ekko.ts               polls the Brain's /trace; pushes new turns
 server/upstream.ts           copied from ekko-deck, plus the poll loop the chat and Files cards share
 server/files.ts              Ekko.Files: the Files card's list, opening viewers, the Pi's copy of each open file
 server/ask.ts                Ask Ekko: tells the tracker to listen, sends what it heard to the Brain
+server/today.ts (+ test)     the Today card: Ekko.Food and Ekko.Budget, the food log and its one undo
 server/desk.test.ts, server/ekko.test.ts, server/files.test.ts, server/ask.test.ts
 web/index.html               <title>Ekko Desk</title> (the labwc window rule matches it)
 web/main.tsx, web/style.css  desk and cards; redraws only on messages and drags; black background, no blur, shadows or transitions
 web/gestures.ts (+ test)     pointers → tap / drag / resize / dock / trash
+web/physics.ts               the toys' shared physics: gravity, bounces off edges and cards, rest, throws
+web/ball.ts (+ test)         the toy ball
+web/fighters.ts (+ test)     the two fighters: moves, hits, climbing, knockdowns, rounds, poses
+web/ragdoll.ts               a fighter gone limp: loose joints on fixed-length bones
+web/toys.ts                  runs the ball and fighters together, so the ball can hit them
 ops/ekko-desk.service        systemd unit; README holds the labwc and tailscale steps
 tracker/requirements.txt     mediapipe, websockets, sounddevice (pinned)
 tracker/main.py              --source 0|url  --desk url  --record/--replay file  --calibrate  --preview

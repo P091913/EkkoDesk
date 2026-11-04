@@ -3,7 +3,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import pdfRenderer from 'pdfjs-dist/build/pdf.renderer.min.mjs?url';
-import { box, createGestures, HOLD_MS, STRIP, TRASH, type Card, type Phase, type Result } from './gestures';
+import { R as BALL_R } from './ball';
+import { pose } from './fighters';
+import { BALL_SPOT, box, createGestures, FIGHT_SPOT, HOLD_MS, STRIP, TRASH, type Card, type Phase, type Result } from './gestures';
+import { createToys } from './toys';
 
 type Turn = { id: string; channel: string; at: string; said?: string; reply?: string; state: 'run' | 'ok' | 'err' };
 type StoreFile = { id: string; name: string; type: string; from: string; at: string };
@@ -17,6 +20,17 @@ let chat: { turns: Turn[]; error?: string } = { turns: [] };
 let fileList: { files: StoreFile[]; error?: string } = { files: [] };
 // Ask Ekko, from the server's `ask` messages: what the chat card's button shows, and why the last question failed.
 let asking: { state: string; note: string | null } = { state: 'idle', note: null };
+// The Today card, from the server's `today` messages (PROTOCOL.md); null until the first read.
+type Glance = { status: string; message: string; billsLeft?: number; leftToPay?: number; next?: { item: string; amount: number; date: string | null } | null };
+let today: {
+  day: { total?: number; error?: string } | null;
+  usual: { foods?: { name: string; caloriesEach: number }[]; error?: string } | null;
+  glance: Glance | null;
+} = { day: null, usual: null, glance: null };
+// What the last food tap said, with Undo while `undo`. Shown for UNDO_SHOWN ms.
+let logged: { message: string; undo: boolean } | null = null;
+let logging = false;
+const UNDO_SHOWN = 10_000;
 const shown = new Map<string, Shown>();
 // Each card's size as last saved. A PDF page is redrawn when it changes: once a resize ends, not all through it.
 let settled = new Map<string, string>();
@@ -30,16 +44,22 @@ const PRESET_ROW = 0.6; // where that row starts, 0–1 down the card
 const NEW_MS = 10_000; // how long a new note, or a file just shown, stays highlighted
 
 // The page's calls to its own server. The server pushes the new `state` back to every page.
-function api(method: string, path: string, body?: object) {
-  fetch(path, {
+// The answer's body comes back for the few taps that show it (the food log).
+function api(method: string, path: string, body?: object): Promise<any> {
+  return fetch(path, {
     method,
     headers: { 'Content-Type': 'application/json', 'X-Desk': '1' },
     body: body && JSON.stringify(body),
   })
     .then(async (r) => {
-      if (!r.ok) console.error(`${method} ${path}:`, (await r.json()).error);
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) console.error(`${method} ${path}:`, b.error);
+      return b;
     })
-    .catch((e) => console.error(`${method} ${path}:`, e));
+    .catch((e) => {
+      console.error(`${method} ${path}:`, e);
+      return { ok: false, error: "The desk server isn't answering." };
+    });
 }
 
 // Saved on release, never during a drag. A viewer's page turned by a tap goes with it.
@@ -93,6 +113,32 @@ const mmss = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
+// The quick food log. A second tap while one is on its way is dropped: tracker taps can misfire.
+let loggedTimer: ReturnType<typeof setTimeout> | undefined;
+function showLogged(message: string, undo: boolean) {
+  logged = { message, undo };
+  clearTimeout(loggedTimer);
+  loggedTimer = setTimeout(() => {
+    logged = null;
+    redraw();
+  }, UNDO_SHOWN);
+  redraw();
+}
+function logFood(food: string) {
+  if (logging) return;
+  logging = true;
+  api('POST', '/api/desk/food/log', { food }).then((b) => {
+    logging = false;
+    showLogged(b.message ?? b.error ?? '', b.ok === true);
+  });
+}
+function undoFood() {
+  if (!logged?.undo) return;
+  logged.undo = false; // one undo per tap
+  redraw();
+  api('POST', '/api/desk/food/undo').then((b) => showLogged(b.message ?? b.error ?? '', false));
+}
+
 // Tracker taps aren't clicks, so what's under a tap is found from where it landed on the page.
 function under(c: Card, at: { x: number; y: number }, selector: string) {
   const b = box(c);
@@ -102,8 +148,15 @@ function under(c: Card, at: { x: number; y: number }, selector: string) {
 // Timer: a preset starts it; the time pauses, resumes, or clears "done". Files: a row opens that file.
 // Viewer: the left or right third turns the page (saved with the tap); a tap on a failed file tries again.
 // Chat: the Ask Ekko button starts listening, and a second tap sends. A tap on the turns pages down, then back to the top.
+// Today: a food logs one of it, Undo takes it back, and anywhere else reads everything again, the budget included.
 function tapped(c: Card, at: { x: number; y: number }) {
   if (c.docked) return;
+  if (c.kind === 'today') {
+    const food = under(c, at, '[data-food]');
+    if (food) return logFood(food.dataset.food!);
+    if (under(c, at, '[data-undo]')) return undoFood();
+    return void api('POST', '/api/desk/today/refresh');
+  }
   if (c.kind === 'timer') {
     const timer = (body: object) => api('POST', '/api/desk/timer', body);
     if (at.y >= PRESET_ROW) return timer({ action: 'start', minutes: PRESETS[Math.min(PRESETS.length - 1, Math.floor(at.x * PRESETS.length))] });
@@ -173,9 +226,56 @@ function apply(r: Result) {
   if (r.redraw) redraw();
 }
 
+// The toys (toys.ts): the ball and the two fighters, moved straight in the DOM frame by frame, and only while something
+// moves (a throw, a round). The rest of the page still redraws only on changes, as the Pi needs.
+const toys = createToys();
+const { ball, fighters } = toys;
+let ballEl: HTMLDivElement | null = null;
+let fighterEls: { path: SVGPathElement; head: SVGCircleElement }[] = [];
+let frameId = 0;
+let lastFrame = 0;
+const aspect = () => innerWidth / innerHeight;
+// What the spots say: Preact redraws them when it changes, the frames don't.
+const toyLabels = () => `${ball.out} ${fighters.out} ${fighters.round}`;
+function drawToys() {
+  if (ballEl) ballEl.style.transform = `translate(${(ball.x - BALL_R) * innerHeight}px, ${(ball.y - BALL_R) * innerHeight}px)`;
+  fighterEls.forEach((el, i) => {
+    const p = pose(fighters.list[i]);
+    el.path.setAttribute('d', p.d);
+    el.head.setAttribute('cx', p.head[0].toFixed(4));
+    el.head.setAttribute('cy', p.head[1].toFixed(4));
+    el.head.setAttribute('r', p.r.toFixed(4));
+  });
+}
+function frame(now: number) {
+  const before = toyLabels();
+  const moving = toys.advance(Math.max(0, Math.min(now - lastFrame, 100)) / 1000, cards, aspect());
+  lastFrame = now;
+  drawToys();
+  frameId = moving ? requestAnimationFrame(frame) : 0;
+  if (toyLabels() !== before) redraw(); // a round ended: "again"
+}
+// After anything that could move a toy or what it stands on: it runs until all settle again, usually one frame.
+function roll() {
+  toys.wake();
+  if ((ball.out || fighters.out) && !frameId) {
+    lastFrame = performance.now();
+    frameId = requestAnimationFrame(frame);
+  }
+}
+// The toys take a pointer that lands on one of them or on their spots; everything else goes to the cards.
+function toy(phase: Phase, id: string, x: number, y: number, t: number) {
+  const before = toyLabels();
+  if (!toys.pointer(phase, id, x, y, t, aspect())) return false;
+  drawToys();
+  if (phase !== 'move') roll();
+  if (toyLabels() !== before) redraw();
+  return true;
+}
+
 // Tracker ids get a "t" prefix and mouse ids an "m", so the two can never collide.
 function track(phase: Phase, id: string, x: number, y: number, t: number) {
-  apply(pointer(phase, id, x, y, t));
+  if (!toy(phase, id, x, y, t)) apply(pointer(phase, id, x, y, t));
   if (phase === 'down' || phase === 'move') pinches.set(id, { x, y });
   else pinches.delete(id);
   redraw();
@@ -221,6 +321,9 @@ function connect() {
     } else if (m?.type === 'turns' && Array.isArray(m.turns)) {
       chat = { turns: m.turns, error: typeof m.error === 'string' ? m.error : undefined };
       redraw();
+    } else if (m?.type === 'today') {
+      today = { day: m.day ?? null, usual: m.usual ?? null, glance: m.glance ?? null };
+      redraw();
     } else if (m?.type === 'ask' && typeof m.state === 'string') {
       asking = { state: m.state, note: typeof m.note === 'string' ? m.note : null };
       redraw();
@@ -237,7 +340,10 @@ function connect() {
   };
 }
 
-const mouse = (phase: Phase) => (e: PointerEvent) => apply(pointer(phase, `m${e.pointerId}`, e.clientX / innerWidth, e.clientY / innerHeight, e.timeStamp));
+const mouse = (phase: Phase) => (e: PointerEvent) => {
+  const [id, x, y] = [`m${e.pointerId}`, e.clientX / innerWidth, e.clientY / innerHeight];
+  if (!toy(phase, id, x, y, e.timeStamp)) apply(pointer(phase, id, x, y, e.timeStamp));
+};
 addEventListener('pointerdown', mouse('down'));
 addEventListener('pointermove', mouse('move'));
 addEventListener('pointerup', mouse('up'));
@@ -338,6 +444,29 @@ function Turns({ font }: { font: { fontSize: string } }) {
 
 const ASK_LABEL: Record<string, string> = { listening: 'Listening… tap to send', working: 'Working on it…', thinking: 'Ekko is thinking…' };
 
+// Ekko's budget is in dollars (en-US on Ekko's side). Dates come as yyyy-MM-dd, the Pi's own day.
+const money = (v: number) => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+const monthDay = (d: string) => new Date(`${d}T00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+// The month's bills: how many are left and what they come to, then the next one, marked when it's past due.
+function Bills({ g }: { g: Glance | null }) {
+  if (!g) return null;
+  if (g.status !== 'ok') return <p class="muted">{g.message}</p>;
+  const n = g.next;
+  const late = !!n?.date && n.date < new Date().toLocaleDateString('en-CA'); // en-CA writes yyyy-mm-dd
+  return (
+    <>
+      <div>{g.billsLeft === 0 ? 'All bills paid this month.' : `${g.billsLeft} bill${g.billsLeft === 1 ? '' : 's'} left · ${money(g.leftToPay ?? 0)} to pay`}</div>
+      {n && (
+        <div class={late ? 'overdue' : 'muted'}>
+          Next: {n.item} {money(n.amount)}
+          {n.date && (late ? `, overdue since ${monthDay(n.date)}` : `, due ${monthDay(n.date)}`)}
+        </div>
+      )}
+    </>
+  );
+}
+
 // Written as big as fits, like on paper: a short note gets big writing, a long one shrinks to 12 px and is then cut off.
 // The area each character needs is about 0.5 em wide by 1.3 em tall, plus room for word wrapping.
 function noteFont(text: string, b: { w: number; h: number }) {
@@ -374,6 +503,35 @@ function Body({ c, b }: { c: Card; b: { w: number; h: number } }) {
         <div class={`ask ${asking.state}`} data-ask style={font}>
           <b>{ASK_LABEL[asking.state] ?? 'Ask Ekko'}</b>
           {asking.note && <span>{asking.note}</span>}
+        </div>
+      </>
+    );
+  }
+  if (c.kind === 'today') {
+    const { day, usual, glance } = today;
+    const font = { fontSize: `${b.w * 5}vw` };
+    return (
+      <>
+        <div class="cal" style={{ fontSize: day?.error ? font.fontSize : `${b.w * 13}vw` }}>
+          {!day ? '…' : day.error ? <p class="muted">{day.error}</p> : `${Math.round(day.total ?? 0).toLocaleString('en-US')} cal`}
+        </div>
+        <div class="foods" style={font}>
+          {usual?.foods?.length === 0 && <p class="muted">Log food with Ekko and your usual foods show up here.</p>}
+          {usual?.foods?.map((f) => (
+            <div key={f.name} class="food" data-food={f.name}>
+              <b>{f.name}</b>
+              <span>{Math.round(f.caloriesEach)}</span>
+            </div>
+          ))}
+        </div>
+        {logged && (
+          <div class="logged" style={font}>
+            <span>{logged.message}</span>
+            {logged.undo && <b data-undo>Undo</b>}
+          </div>
+        )}
+        <div class="bills" style={font}>
+          <Bills g={glance} />
         </div>
       </>
     );
@@ -420,6 +578,7 @@ function App() {
     redraw = () => set((n) => n + 1);
     connect();
   }, []);
+  useLayoutEffect(roll); // a card may have moved, come or gone under a toy
   const now = Date.now();
   const bin = binAt === undefined ? '' : performance.now() - binAt >= HOLD_MS ? ' armed' : ' over';
   return (
@@ -446,6 +605,41 @@ function App() {
           </div>
         );
       })}
+      <div class={`spot${ball.out ? ' out' : ''}`} style={{ width: `${BALL_SPOT.w * 100}vw`, height: `${BALL_SPOT.h * 100}vh`, transform: at(BALL_SPOT.x, BALL_SPOT.y) }}>
+        {ball.out ? 'put away' : 'ball'}
+      </div>
+      <div class={`spot${fighters.out ? ' out' : ''}`} style={{ width: `${FIGHT_SPOT.w * 100}vw`, height: `${FIGHT_SPOT.h * 100}vh`, transform: at(FIGHT_SPOT.x, FIGHT_SPOT.y) }}>
+        {!fighters.out ? 'fight' : fighters.round === 'over' ? 'again' : 'fighting'}
+        {fighters.out && <small>hold: away</small>}
+      </div>
+      {fighters.out && (
+        // The page's height is 1 unit, as in the toys' physics, so the fighters' poses go in as they are.
+        <svg
+          class="fighters"
+          viewBox={`0 0 ${aspect()} 1`}
+          ref={(el) => {
+            fighterEls = el ? [...el.querySelectorAll('g')].map((g) => ({ path: g.querySelector('path')!, head: g.querySelector('circle')! })) : [];
+            drawToys();
+          }}
+        >
+          {[0, 1].map((i) => (
+            <g key={i} class={`f${i}`}>
+              <path />
+              <circle />
+            </g>
+          ))}
+        </svg>
+      )}
+      {ball.out && (
+        <div
+          class="ball"
+          style={{ width: `${BALL_R * 200}vh`, height: `${BALL_R * 200}vh` }}
+          ref={(el) => {
+            ballEl = el;
+            drawToys();
+          }}
+        />
+      )}
       {[...pinches].map(([id, p]) => (
         <div key={id} class="pinch" style={{ transform: at(p.x, p.y) }} />
       ))}

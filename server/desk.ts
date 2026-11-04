@@ -31,6 +31,7 @@ const DEFAULTS: Widget[] = [
   { id: 'chat', kind: 'chat', x: 0.05, y: 0.08, w: 0.25, h: 0.45, z: 1, docked: false },
   { id: 'timer', kind: 'timer', x: 0.7, y: 0.08, w: 0.2, h: 0.2, z: 2, docked: false },
   { id: 'files', kind: 'files', x: 0.7, y: 0.32, w: 0.2, h: 0.5, z: 3, docked: false },
+  { id: 'today', kind: 'today', x: 0.05, y: 0.56, w: 0.25, h: 0.32, z: 4, docked: false },
 ];
 const MIN = 0.02; // the page's smallest card is 0.05; this only rejects nonsense
 const RANGES: Record<string, [number, number]> = { x: [0, 1], y: [0, 1], w: [MIN, 1], h: [MIN, 1] };
@@ -105,9 +106,12 @@ const fail = (status: 400 | 404 | 409, error: string): Result => ({ status, body
 
 export function createDesk(file: string, changed: (widgets: Widget[]) => void, now = Date.now) {
   let widgets = load(file);
-  // A default card added since the file was written (the Files card) goes in the first free spot, on top. Saved with the next change.
+  // A default card added since the file was written (Files, Today) goes in its own spot if that's free, else the first free
+  // spot, on top. Saved with the next change.
   for (const d of DEFAULTS) {
-    if (!widgets.some((w) => w.id === d.id)) widgets.push({ ...d, ...place(widgets, d), z: Math.max(0, ...widgets.map((w) => w.z)) + 1 });
+    if (widgets.some((w) => w.id === d.id)) continue;
+    const spot = widgets.some((w) => overlaps(d, w)) ? place(widgets, d) : { x: d.x, y: d.y };
+    widgets.push({ ...d, ...spot, z: Math.max(0, ...widgets.map((w) => w.z)) + 1 });
   }
 
   // Temp file + rename, so a crash or power cut mid-write leaves the old file whole. Every change is saved, then pushed.
