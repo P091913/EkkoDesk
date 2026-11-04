@@ -154,6 +154,76 @@ body {
 .ask span {
   font-size: 0.85em;
 }
+/* Today: calories big, the usual foods as buttons, what the last tap did, then the bills. */
+.today:not(.chip) {
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-auto-rows: auto;
+  place-items: stretch;
+  gap: 6px;
+  padding: 10px;
+}
+.today p {
+  margin: 0;
+}
+.today .cal {
+  font-weight: 560;
+  line-height: 1.1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.today .foods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 0.4em;
+  min-height: 0;
+  overflow: hidden;
+}
+.today .foods .muted {
+  grid-column: 1 / -1;
+}
+.food {
+  display: flex;
+  gap: 0.4em;
+  justify-content: space-between;
+  padding: 0.35em 0.6em;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.food b {
+  overflow: hidden;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.food span,
+.today .muted {
+  color: var(--muted);
+}
+.today .logged {
+  display: flex;
+  gap: 0.6em;
+  align-items: center;
+  font-size: 0.85em;
+}
+.today .logged span {
+  flex: 1;
+  min-width: 0;
+}
+.today .logged b {
+  padding: 0.3em 0.9em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.today .bills {
+  padding-top: 6px;
+  font-size: 0.9em;
+  border-top: 1px solid var(--line);
+}
+.today .overdue {
+  color: var(--err);
+}
 /* Newest first; what doesn't fit is cut off at the bottom. */
 .turns,
 .list {
@@ -266,6 +336,66 @@ body {
   color: #000;
   background: var(--err);
 }
+/* The toy ball's spot, at the left end of the strip as the trash is at the right. */
+.spot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2147483645;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 16px;
+  border-right: 1px dashed var(--line);
+  pointer-events: none;
+}
+.spot.out {
+  color: var(--text);
+}
+.spot small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+/* The fighters: lines and a head, no fill, no shadow. The SVG's units are the toys' (the page is 1 high). */
+.fighters {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483643;
+  width: 100vw;
+  height: 100vh;
+  overflow: visible;
+  pointer-events: none;
+}
+.fighters path {
+  fill: none;
+  stroke-width: 0.007;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.fighters circle {
+  stroke: none; /* a filled head; an outline 1 unit wide would be the whole page high */
+}
+.f0 {
+  stroke: #7c88e8;
+  fill: #7c88e8;
+}
+.f1 {
+  stroke: #cf6f5c;
+  fill: #cf6f5c;
+}
+/* Flat, no shadow: while it moves, the Pi repaints only this one circle, on its own layer. */
+.ball {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2147483644;
+  border-radius: 50%;
+  background: #b8743f;
+  pointer-events: none;
+  will-change: transform;
+}
 .strip {
   position: fixed;
   left: 0;
@@ -291,7 +421,7 @@ body {
 }
 .status {
   position: fixed;
-  left: 16px;
+  left: calc(16vw + 16px); /* right of the toys' spots (FIGHT_SPOT.x + FIGHT_SPOT.w) */
   bottom: 12px;
   color: var(--muted);
   font-size: 16px;

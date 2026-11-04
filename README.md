@@ -17,6 +17,8 @@ A projected desk for Ekko: a camera watches your hands, and pinches grab and mov
 | `EKKO_KEY` | The desk's own key to the Brain: the same value as the Brain's `Api__Keys__desk`. |
 | `FILES_URL` | Where Ekko.Files is, for the Files card and viewers: `http://127.0.0.1:5095` on the PC, no trailing slash. The PC's tailnet address in phase 4. |
 | `FILES_KEY` | The desk's own key to Ekko.Files. The page never gets it. |
+| `FOOD_URL`, `BUDGET_URL` | Where Ekko.Food and Ekko.Budget are, for the Today card: `http://127.0.0.1:5085` and `http://127.0.0.1:5080` on the PC. The PC's tailnet address in phase 4. |
+| `FOOD_KEY`, `BUDGET_KEY` | The desk's own keys to them: the same values as Ekko's `Food_DeskKey` and `Budget_DeskKey`. The budget key is read-only. The page never gets either. |
 
 Make the tracker key and add it to `.env`, then copy it into the tracker's environment (open a new terminal afterwards):
 

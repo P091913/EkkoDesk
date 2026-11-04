@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHIP, createGestures, TRASH, type Card } from './gestures.ts';
+import { CHIP, createGestures, FIGHT_SPOT, TRASH, type Card } from './gestures.ts';
 
 const card = (id: string, x: number, y: number, z = 1): Card => ({ id, kind: id, x, y, w: 0.2, h: 0.2, z, docked: false });
 const setup = (...extra: Card[]) => {
@@ -105,6 +105,11 @@ test('releasing a drag in the strip docks; dragging the chip out restores it', (
   pointer('up', 'm1', 0.3, 0.3, 500);
   assert.equal(a.docked, false);
   near(a.w, 0.2);
+
+  pointer('down', 'm1', 0.31, 0.31, 600); // dropped on the toys' spots: it docks beside them instead
+  pointer('move', 'm1', 0.01, 0.95, 700);
+  pointer('up', 'm1', 0.01, 0.95, 800);
+  assert.deepEqual([a.docked, a.x], [true, FIGHT_SPOT.x + FIGHT_SPOT.w]);
 });
 
 test('a chip dropped back in the strip snaps into line; a tap there does not dock', () => {

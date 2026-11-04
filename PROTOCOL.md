@@ -56,6 +56,8 @@ The page connects to `/ws/page`, localhost only. Browsers can't add a custom hea
 {"type":"turns","turns":[{"id":"…","channel":"telegram","at":"2026-11-03T18:24:00Z","said":"…","reply":"…","state":"ok"}],"error":"Ekko unavailable"}
 {"type":"files","files":[{"id":"0123456789abcdef","name":"invoice.pdf","type":"application/pdf","from":"pc","at":"2026-11-03T18:00:00Z"}],"error":"Ekko's file store isn't answering."}
 {"type":"ask","state":"listening","note":null}
+{"type":"today","day":{"total":1240},"usual":{"foods":[{"name":"coffee","caloriesEach":5}]},
+ "glance":{"status":"ok","message":"3 bills left.","billsLeft":3,"leftToPay":1850,"next":{"item":"Rent","amount":1200,"date":"2026-11-05"}}}
 ```
 
 - **`state`:** the full state goes out on connect and after every change. A few dozen widgets is tiny, so there's no diffing.
@@ -92,6 +94,14 @@ The page connects to `/ws/page`, localhost only. Browsers can't add a custom hea
   - **The question** goes to the Brain's `POST /message` with `EKKO_KEY`: `{"text":…,"channel":"desk","conversationId":"desk"}`. This is DR-42 on Ekko's side.
   - **The answer:** the Brain answers `{"text":…,"requestId":…}`. The whole text goes into that turn's `reply` in `turns`.
   - **Approvals:** a server-ops run asked for from the desk waits in the `desk` conversation. Saying "approve" or "deny" through Ask Ekko answers it.
+- **`today`:** the Today card (Ekko's DR-43). It's sent on connect and when it changes. Each part is null until it's first read.
+  - **`day`:** `{"total":…}` is today's calories from Ekko.Food's `/food/day`, or `{"error":"Ekko's food diary isn't answering."}`.
+  - **`usual`:** `{"foods":[…]}` is up to 6 from `/food/usual?limit=6`, or the same error. An empty list shows "Log food with Ekko and your usual foods show up here."
+  - **`glance`:** from Ekko.Budget's `/budget/glance`.
+    - With `status` `ok`, it has `billsLeft`, `leftToPay` and `next` (`date` is `yyyy-MM-dd` or null; a date before today is shown as overdue).
+    - Otherwise it has only `status` and `message`: Ekko's own sentence for `not_found` (no tab for this month) or `error` (Google failed), or "Ekko's budget isn't answering."
+  - **Polling:** while the Today card is out and a page is open, food every 2 minutes, with `FOOD_KEY`.
+  - **The budget** reads the Google Sheet, so it's kept on the server and read at most every 10 minutes, with `BUDGET_KEY` (read-only on Ekko's side). A tap on the card reads everything again at once.
 - When the tracker disconnects, the page cancels its live pinches, since no `up` will come, and hides the calibration image.
 
 ## Page → desk server
@@ -107,6 +117,16 @@ Plain HTTP under `/api/desk/`, behind the `X-Desk` check (header `X-Desk: 1` and
 - `POST /api/desk/viewers` `{"file":"<id>"}`: opens a file from the Files card's list, like `/api/files/show`.
 - `POST /api/desk/ask` `{"action":"start"}` or `{"action":"stop"}`: Ask Ekko. It answers `{"ok":true}`, and how it went comes as `ask` messages.
   - A start while not idle, or a stop while not listening, changes nothing.
+- `POST /api/desk/food/log` `{"food":"coffee"}`: logs one of a usual food through Ekko.Food's `/food/log`. These skip the Brain, so they don't show in the chat card.
+  - **200** `{"ok":true,"message":"Logged coffee: 5 calories. 1,245 calories today."}`. With `ok` false, Ekko didn't log it (the food was removed meanwhile), and `message` says why.
+  - **400** "That isn't one of your usual foods any more." when the name isn't in the current `usual` list.
+  - **502** "Ekko's food diary isn't answering."
+- `POST /api/desk/food/undo`: Ekko.Food's `/food/undo`, which takes off today's last entry, whoever logged it.
+  - So it's allowed once, within 15 s of the desk's own log. The page shows Undo for 10 s.
+  - Otherwise 409 "Too late to undo that here. Ask Ekko to undo it."
+- `POST /api/desk/today/refresh`: a tap on the Today card away from its buttons. Everything is read again at once, the budget included.
+
+The toys (the ball and the two fighters) are the page's alone: nothing about them goes to the server, and nothing is saved.
 - `GET /api/desk/files/:id`: the bytes of an open viewer's file, with its stored `Content-Type` and `X-Content-Type-Options: nosniff`.
   - An `<img src>` can't send `X-Desk`, so the page fetches the bytes and uses a blob URL (photos) or the ArrayBuffer (pdf.js).
   - The server copies the file from Ekko.Files to `data/files/<id>` the first time, so it still shows with the PC off.

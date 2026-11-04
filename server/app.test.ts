@@ -6,12 +6,14 @@ import { join } from 'node:path';
 import { createApp as app2, keyOk, pageOk } from './app.ts';
 import { createDesk, type Desk } from './desk.ts';
 import { createFiles } from './files.ts';
+import { createToday, SAY } from './today.ts';
 
-// Ekko.Files isn't configured here: these tests stop at the checks in front of it (files.test.ts mocks the store).
-// Ask Ekko is recorded, not run (ask.test.ts covers it).
+// Ekko.Files, Ekko.Food and Ekko.Budget aren't configured here: these tests stop at the checks in front of them
+// (files.test.ts and today.test.ts mock them). Ask Ekko is recorded, not run (ask.test.ts covers it).
 const createApp = (desk: Desk, asked: string[] = []) => {
   const dir = join(mkdtempSync(join(tmpdir(), 'desk-')), 'files');
-  return app2(desk, createFiles({ name: 'Ekko.Files' }, dir, desk, () => {}), { start: () => asked.push('start'), stop: () => asked.push('stop') });
+  const ask = { start: () => asked.push('start'), stop: () => asked.push('stop') };
+  return app2(desk, createFiles({ name: 'Ekko.Files' }, dir, desk, () => {}), ask, createToday({ name: 'Ekko.Food' }, { name: 'Ekko.Budget' }, () => {}));
 };
 
 test('keyOk needs a configured key and an exact match', () => {
@@ -83,6 +85,18 @@ test('Ask Ekko is for the page only, and takes start or stop', async () => {
   assert.equal((await post({ 'x-desk': '1' }, '{"action":"start"}')).status, 200);
   assert.equal((await post({ 'x-desk': '1' }, '{"action":"stop"}')).status, 200);
   assert.deepEqual(asked, ['start', 'stop']);
+});
+
+test('the Today card routes are for the page only, and log only usual foods', async () => {
+  const app = createApp(createDesk(join(mkdtempSync(join(tmpdir(), 'desk-')), 'desk.json'), () => {}));
+  const post = (path: string, headers: Record<string, string>, body = '{}') =>
+    app.request(path, { method: 'POST', headers: { 'content-type': 'application/json', host: '127.0.0.1:8081', ...headers }, body });
+  for (const path of ['/api/desk/food/log', '/api/desk/food/undo', '/api/desk/today/refresh']) assert.equal((await post(path, {})).status, 403, path);
+  const log = await post('/api/desk/food/log', { 'x-desk': '1' }, '{"food":"coffee"}'); // no usual list yet
+  assert.deepEqual([log.status, (await log.json()).error], [400, SAY.notUsual]);
+  const undo = await post('/api/desk/food/undo', { 'x-desk': '1' });
+  assert.deepEqual([undo.status, (await undo.json()).error], [409, SAY.late]);
+  assert.equal((await post('/api/desk/today/refresh', { 'x-desk': '1' })).status, 200);
 });
 
 test('file bytes are for the page only, and only for open files', async () => {

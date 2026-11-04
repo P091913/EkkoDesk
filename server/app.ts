@@ -4,6 +4,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import type { Ask } from './ask.ts';
 import type { Desk, Result } from './desk.ts';
 import type { Files } from './files.ts';
+import type { Today } from './today.ts';
 
 const local = /^(127\.0\.0\.1|localhost)(:\d+)?$/;
 const sha = (s: string) => createHash('sha256').update(s).digest();
@@ -36,7 +37,7 @@ const brain: MiddlewareHandler = async (c, next) => {
   await next();
 };
 
-export const createApp = (desk: Desk, files: Files, ask: Pick<Ask, 'start' | 'stop'>) =>
+export const createApp = (desk: Desk, files: Files, ask: Pick<Ask, 'start' | 'stop'>, today: Pick<Today, 'log' | 'undo' | 'refresh'>) =>
   new Hono()
     // The page's routes. Loopback alone doesn't stop another page open in a browser on the Pi from calling us
     // (CSRF, DNS rebinding): the custom header forces a CORS preflight we never approve, and the Host check rejects rebound names.
@@ -59,6 +60,13 @@ export const createApp = (desk: Desk, files: Files, ask: Pick<Ask, 'start' | 'st
       const action: unknown = (await body(c))?.action;
       if (action !== 'start' && action !== 'stop') return c.json({ ok: false, error: 'action must be start or stop.' }, 400);
       ask[action]();
+      return c.json({ ok: true });
+    })
+    // The Today card: one tap logs one of a usual food; Undo only just after; a tap elsewhere refreshes it.
+    .post('/api/desk/food/log', async (c) => reply(c, await today.log((await body(c))?.food)))
+    .post('/api/desk/food/undo', async (c) => reply(c, await today.undo()))
+    .post('/api/desk/today/refresh', (c) => {
+      void today.refresh();
       return c.json({ ok: true });
     })
     .use('/api/notes', brain)

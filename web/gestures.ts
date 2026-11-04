@@ -32,6 +32,10 @@ export const STRIP = 0.9; // releasing a drag below this docks the card
 export const CHIP = { w: 0.1, h: 0.05, y: 0.925 };
 // Notes and viewers only: let go here after holding it there HOLD_MS to remove it. A quicker release just docks it.
 export const TRASH = { x: 0.9, y: STRIP, w: 0.1, h: 1 - STRIP };
+// The toys' spots, at the other end of the strip: the ball's (ball.ts), then the fighters' (fighters.ts).
+export const BALL_SPOT = { x: 0, y: STRIP, w: 0.08, h: 1 - STRIP };
+export const FIGHT_SPOT = { x: 0.08, y: STRIP, w: 0.08, h: 1 - STRIP };
+const TOYS_END = FIGHT_SPOT.x + FIGHT_SPOT.w;
 export const HOLD_MS = 600;
 const TRASHABLE = new Set(['note', 'viewer']);
 const inTrash = (x: number, y: number) => x >= TRASH.x && y >= TRASH.y;
@@ -131,7 +135,7 @@ export function createGestures(cards: () => Card[]) {
     }
     if (phase === 'up' && !resized && g.moved) card.docked = y > STRIP;
     if (card.docked) {
-      card.x = clamp(card.x, 0, TRASH.x - CHIP.w); // left of the trash, never hidden under it
+      card.x = clamp(card.x, TOYS_END, TRASH.x - CHIP.w); // between the toys' spots and the trash, never under them
       card.y = CHIP.y; // chips sit in a line in the strip
     } else {
       card.x = clamp(card.x, 0, 1 - card.w);
