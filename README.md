@@ -5,16 +5,25 @@ A projected desk for Ekko: a camera watches your hands, and pinches grab and mov
 - **Desk server and page** (TypeScript, this folder): the server runs on `127.0.0.1:8081`, and the page is the desk.
 - **Tracker** (Python, `tracker/`): it reads the webcam, finds pinches and sends them to the desk server.
 
-## Key
+## Keys
 
-The tracker and the desk server share one key. Generate it once:
+`.env` holds these, one per line; `.env.example` lists the names. Keys never get printed: the commands below write them straight where they go.
+
+| Name | What it is |
+|---|---|
+| `DESK_TRACKER_KEY` | Shared by the tracker and the desk server. |
+| `DESK_BRAIN_KEY` | The key Ekko's Brain sends with notes: the same value as the Brain's `Desk__ApiKey`. |
+| `EKKO_URL` | Where the Brain is, for the chat card: `http://127.0.0.1:5065`, no trailing slash. |
+| `EKKO_KEY` | The desk's own key to the Brain: the same value as the Brain's `Api__Keys__desk`. |
+| `FILES_URL` | Where Ekko.Files is, for the Files card and viewers: `http://127.0.0.1:5095` on the PC, no trailing slash. The PC's tailnet address in phase 4. |
+| `FILES_KEY` | The desk's own key to Ekko.Files. The page never gets it. |
+
+Make the tracker key and add it to `.env`, then copy it into the tracker's environment (open a new terminal afterwards):
 
 ```powershell
-node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+node -e "require('fs').appendFileSync('.env', 'DESK_TRACKER_KEY=' + require('crypto').randomBytes(24).toString('hex') + '\n')"
+setx DESK_TRACKER_KEY (Select-String -Path .env -Pattern '^DESK_TRACKER_KEY=(.+)').Matches[-1].Groups[1].Value
 ```
-
-- **Desk server:** copy `.env.example` to `.env` and set `DESK_TRACKER_KEY` there.
-- **Tracker:** set the same value in its environment, for example `setx DESK_TRACKER_KEY <value>`, then open a new terminal.
 
 ## Desk server and page
 

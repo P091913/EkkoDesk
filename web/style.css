@@ -7,6 +7,12 @@
   --text: #c9cdd8;
   --muted: #6b7183;
   --accent: #6d7cff;
+  /* Sticky-note paper, kept dimmer than real yellow so it doesn't throw light on hands or swing the camera's exposure. */
+  --note: #a8963e;
+  --note-glue: #988636;
+  --note-fold: #7d6e2b;
+  --note-ink: #1f1a06;
+  --err: #c4454a;
   font: 22px/1.35 system-ui, sans-serif;
 }
 * {
@@ -34,6 +40,7 @@ body {
 .card {
   display: grid;
   place-items: center;
+  overflow: hidden;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -41,6 +48,188 @@ body {
 .chip {
   font-size: 16px;
   color: var(--muted);
+}
+.chip .label {
+  max-width: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* A sticky note: paper colour, a darker glue strip along the top, a folded bottom-right corner, nearly square
+   corners. Flat colours and gradients only, no shadows, so the Pi paints it as cheaply as any card. */
+.note:not(.chip) {
+  place-items: start;
+  padding: 18px 12px 12px; /* noteFont() in main.tsx subtracts these */
+  color: var(--note-ink);
+  font-weight: 500;
+  border: none;
+  border-radius: 2px;
+  background:
+    linear-gradient(to bottom, var(--note-glue) 0 10px, transparent 10px),
+    linear-gradient(135deg, var(--note) calc(100% - 22px), var(--note-fold) calc(100% - 22px));
+}
+.note p {
+  margin: 0;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.note.chip {
+  color: var(--note-ink);
+  background: var(--note);
+  border: none;
+  border-radius: 2px;
+}
+/* A new note or a file just shown, for 10 s: a plain outline, no fade. */
+.new {
+  outline: 2px solid var(--accent);
+}
+.timer:not(.chip) {
+  grid-template-rows: 3fr 2fr;
+  place-items: stretch;
+}
+.timer .time {
+  display: grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.timer .time.paused,
+.timer .time.idle {
+  color: var(--muted);
+}
+.timer .time.done {
+  color: var(--accent);
+}
+.timer .presets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--line);
+}
+.timer .presets span {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.timer .presets span + span {
+  border-left: 1px solid var(--line);
+}
+.chat:not(.chip),
+.files:not(.chip) {
+  place-items: stretch;
+  padding: 10px;
+}
+/* Newest first; what doesn't fit is cut off at the bottom. */
+.turns,
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr); /* long text ellipsizes instead of widening the column past the card */
+  align-content: start;
+  gap: 0.4em;
+  min-height: 0;
+  overflow: hidden;
+}
+.turn,
+.file {
+  padding: 0.4em 0.6em;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.file b {
+  display: block;
+  overflow: hidden;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file span,
+.list .muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+/* A photo or one PDF page, fitted inside the card, with the page number under it. */
+.viewer:not(.chip) {
+  grid-template-rows: minmax(0, 1fr) auto;
+  place-items: stretch;
+  font-size: 16px;
+}
+.view {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+/* Absolute, so a page drawn at the old size can't push the card around while it's being resized: it just stretches. */
+.view img,
+.view canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none; /* no native image drag stealing the mouse from the card */
+}
+.view .muted {
+  padding: 0 1em;
+  color: var(--muted);
+  text-align: center;
+}
+.viewer .pages {
+  padding: 2px 0 4px;
+  color: var(--muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.turn .said {
+  display: flex;
+  gap: 0.5em;
+}
+.turn .said b {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turn time,
+.turn .ans,
+.turn .via,
+.turns .muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.turn .ans {
+  display: -webkit-box;
+  margin-top: 0.2em;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.turn.err .via {
+  color: var(--err);
+}
+/* Over the cards, so it can be seen lighting up under the note being dropped on it. */
+.trash {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2147483645;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 16px;
+  border-left: 1px dashed var(--line);
+  pointer-events: none;
+}
+.trash.over {
+  color: var(--text);
+  border: 2px solid var(--muted);
+}
+.trash.armed {
+  color: #000;
+  background: var(--err);
 }
 .strip {
   position: fixed;
