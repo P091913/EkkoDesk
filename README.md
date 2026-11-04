@@ -53,6 +53,7 @@ curl.exe -L -o hand_landmarker.task https://storage.googleapis.com/mediapipe-mod
 - **The model** (`hand_landmarker.task`, about 8 MB) stays out of git.
 - **`--preview`:** opens a camera window that shows each pinch point and its ratio. Green means below the start threshold. Press Esc to quit.
 - **`--source`:** a camera index (`0` by default) or a stream URL. **`--desk`:** the server's tracker URL, `ws://127.0.0.1:8081/ws/tracker` by default.
+- **Ask Ekko:** the tracker also records the PC's default microphone when the chat card's Ask Ekko button is tapped, and turns it into text with speaches. `--speech` is speaches' URL, `http://127.0.0.1:8000` by default (the same server as Ekko's glasses), and `--speech-model` its model, `Systran/faster-distil-whisper-small.en` by default. After pulling this change, run the `pip install -r requirements.txt` line again for `sounddevice`.
 - **Tests:** `.venv\Scripts\python -m unittest`, run inside `tracker/`.
 
 ### Recording clips for tuning

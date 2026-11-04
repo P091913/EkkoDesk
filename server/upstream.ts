@@ -2,12 +2,14 @@
 export type Upstream = { name: string; base?: string; key?: string };
 export type Result = { status: number; body: any };
 
-// Every failure comes back as JSON {ok:false, error}, so a dead service only breaks its own card.
-export async function call(up: Upstream, path: string, timeoutMs = 10_000): Promise<Result> {
+// Every failure comes back as JSON {ok:false, error}, so a dead service only breaks its own card. A `body` makes it a JSON POST.
+export async function call(up: Upstream, path: string, timeoutMs = 10_000, body?: object): Promise<Result> {
   if (!up.base) return { status: 503, body: { ok: false, error: `${up.name} not configured` } };
   try {
     const res = await fetch(up.base + path, {
-      headers: up.key ? { 'X-Api-Key': up.key } : {},
+      method: body ? 'POST' : 'GET',
+      headers: { ...(up.key ? { 'X-Api-Key': up.key } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body && JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();

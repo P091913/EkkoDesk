@@ -15,18 +15,35 @@ import mediapipe as mp
 from websockets.sync.client import connect
 
 import calibrate
+import listen
 from pinch import START, Pincher, hands_from, measure, mirror, read_clip
 
 MODEL = Path(__file__).with_name('hand_landmarker.task')
 
 
-def sender(url: str, key: str, q: queue.Queue, connected: threading.Event):
+def receive(ws, on_listen):
+    """The desk's messages to the tracker: only `listen`, for Ask Ekko. Ends when the connection does."""
+    try:
+        for raw in ws:
+            try:
+                m = json.loads(raw)
+                if m['v'] == 1 and m['type'] == 'listen':
+                    on_listen(m['on'] is True)
+            except Exception:  # not JSON, or not ours: ignored, like every receiver here
+                pass
+    except Exception:  # dropped: the sender notices and reconnects
+        pass
+
+
+def sender(url: str, key: str, q: queue.Queue, connected: threading.Event, on_listen):
     """Owns the WebSocket in its own thread, so a slow or dead desk never stalls the camera."""
     while True:
         try:
             with connect(url, additional_headers={'X-Api-Key': key}, open_timeout=5) as ws:
                 while not q.empty():  # events from while we were down are stale
                     q.get_nowait()
+                # websockets allows one thread receiving while another sends.
+                threading.Thread(target=receive, args=(ws, on_listen), daemon=True).start()
                 connected.set()
                 print('connected to', url)
                 while True:
@@ -180,6 +197,8 @@ def main():
     ap.add_argument('--record', metavar='FILE', help='also save the raw landmarks, e.g. recordings/still.jsonl.gz')
     ap.add_argument('--replay', metavar='FILE', help='play a recording to the desk instead of using the camera')
     ap.add_argument('--calibrate', action='store_true', help='find the marker sheet and save calibration.json')
+    ap.add_argument('--speech', default=listen.SPEECH, help="speaches, for Ask Ekko (the same server as Ekko's glasses)")
+    ap.add_argument('--speech-model', default=listen.MODEL, help='the speaches model that turns speech into text')
     args = ap.parse_args()
 
     key = os.environ.get('DESK_TRACKER_KEY')
@@ -188,7 +207,8 @@ def main():
 
     q: queue.Queue = queue.Queue(maxsize=256)
     connected = threading.Event()
-    threading.Thread(target=sender, args=(args.desk, key, q, connected), daemon=True).start()
+    listener = listen.Listener(args.speech, lambda m: send(q, m), args.speech_model)
+    threading.Thread(target=sender, args=(args.desk, key, q, connected, listener.on), daemon=True).start()
 
     cal = calibrate.load()
     to_page = calibrate.mapper(cal['H']) if cal else mirror

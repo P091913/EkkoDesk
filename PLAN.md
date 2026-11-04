@@ -2,7 +2,7 @@
 
 A projector above the desk shows widgets on the desk surface. A camera watches your hands, and pinch gestures grab, move, resize and tap the widgets.
 
-Status: phases 1, 2 and 3 built (2026-11-03), and phase 3 checked from Telegram. Phase 2 still needs the recordings and a calibration run (README). Files on the desk (DR-40/41) is built and checked from Telegram (2026-11-04). Every decision is made (see Decisions at the end).
+Status: phases 1, 2 and 3 built (2026-11-03), and phase 3 checked from Telegram. Phase 2 still needs the recordings and a calibration run (README). Files on the desk (DR-40/41) is built and checked from Telegram (2026-11-04). Ask Ekko by voice is built and checked end to end (2026-11-04). Every decision is made (see Decisions at the end).
 
 ## Context: what already exists
 
@@ -167,6 +167,82 @@ You send Ekko a photo or PDF, from Telegram now and from the deck's Chat later. 
 
 **Checked end to end (2026-11-04):** a PDF sent to the bot opened on the desk after "put it on my desk".
 
+## Ask Ekko by voice
+
+An **Ask Ekko** button along the bottom of the chat card. Tap it, speak, tap again to send. Your words and Ekko's whole answer show in the chat card as a `desk` turn.
+
+**Where the microphone is:** the PC's, recorded by the tracker.
+- The page moves to the Pi in phase 4, and the Pi's Chromium can't use the PC's microphone.
+- The tracker stays on the PC next to the camera, and it's already connected to the desk server.
+- So nothing new runs on the Pi.
+
+**The flow** (messages in PROTOCOL.md):
+1. A tap on the button sends `POST /api/desk/ask {"action":"start"}`. The desk server tells the tracker `listen` on.
+2. The tracker records the default microphone, 16-bit mono at the microphone's own rate (speaches resamples). It stops on the second tap (`listen` off) or after 15 s. Audio stays in memory and is never written to disk.
+3. The tracker sends the WAV to speaches on the PC (`/v1/audio/transcriptions`), the same server as Ekko's glasses and Telegram, and sends back `heard` with the text.
+   - Its `--speech` and `--speech-model` settings default to `http://127.0.0.1:8000` and `Systran/faster-distil-whisper-small.en`.
+   - Localhost stays right in phase 4, because the tracker stays on the PC.
+4. The desk server posts the text to the Brain's `/message` with the desk's key: `{"text":…,"channel":"desk","conversationId":"desk"}`. One conversation, like the glasses, so follow-ups work.
+5. The Brain answers `{"text":…,"requestId":…}`. The desk server puts that whole text into the turn with that id in the chat card.
+   - `/trace` keeps only a reply's first line, cut to 160 characters, so `/trace` alone can't show a long answer.
+
+**Approvals (Ekko's answer e):**
+- A server-ops run asked for from the desk waits in the `desk` conversation, and its question ends "Say approve or deny."
+- Saying "approve" or "deny" through Ask Ekko answers it. The deck still sees it in `/runs/waiting`.
+- So replies are never cut on the desk:
+  - every reply shows whole, with its line breaks;
+  - a tap on the turns pages down, and back to the top after the last page;
+  - "tap for more" shows while some of it is below the edge.
+- Text is sized from the card, so a bigger card doesn't fit more; paging is how a long answer gets read.
+
+**What the button says:**
+- "Ask Ekko", "Listening… tap to send", "Working on it…" (transcribing), "Ekko is thinking…" (with the Brain).
+- When something fails:
+  - "The tracker isn't running, so I can't hear you."
+  - "I can't open the PC's microphone."
+  - "I didn't catch that." Silence isn't sent: the Brain would answer 400, which never reaches `/trace`.
+  - "I couldn't transcribe that right now."
+  - "That's longer than Ekko takes in one message." (over 500 characters, the Brain's limit)
+  - "Ekko couldn't take that: <the Brain's error>." for a 400, worded as the glasses word it.
+  - "Ekko refused the desk's key, so I couldn't pass that on." for a 401.
+  - "Ekko isn't answering." for anything else.
+- If no `heard` comes within 90 s, it gives up with "I couldn't transcribe that right now."
+
+**Keys:** the desk's Brain key (`EKKO_KEY`) now also sends `/message`, not only reads `/trace`. From the desk you can ask anything that Telegram or the glasses can, through the same approvals.
+
+**Ekko's side (DR-42 there, no Ekko code change):**
+- The desk key works on `/message` as is.
+- `desk`/`desk` matches the glasses.
+- Calling speaches directly is right: Telegram and the glasses do the same, each with its own setting.
+- The Brain doesn't shape replies per channel. It aims for one short sentence, but lists run longer.
+
+**Left out:** Ekko speaking the reply (speaches also has Kokoro for that), a wake word, stopping on silence, and choosing a microphone.
+
+**Done when:** with `npm start` and the tracker running, I tap Ask Ekko, say "put a note on my desk: buy milk", tap again, and the note appears.
+
+**Built (2026-11-04):**
+- `server/ask.ts` and its test, with a mock Brain. `call()` in `upstream.ts` takes a body for a JSON POST.
+- `tracker/listen.py` and its test, with a mock speaches and microphone. The tracker now also receives on its WebSocket, in its own thread.
+- `sounddevice` 0.5.6 in `tracker/requirements.txt`. It's loaded only when listening starts.
+- `server/ekko.ts`:
+  - `answer()` holds the whole answers for the last 10 desk questions;
+  - `turnsOf` shows them in place of `/trace`'s line;
+  - a turn whose answer came first is marked `ok` without waiting for `/trace`.
+- **Page:**
+  - replies are no longer clamped to two lines;
+  - `Turns` pages by taps, shows "tap for more", and goes back to the top when a new turn comes in.
+
+**Checked** with the real speaches, a stand-in Brain and a test desk on 8082:
+- A clip spoken by speaches' own Kokoro voice came back as "Put a note on my desk, buy milk."
+- The first request took 8.5 s while speaches loaded the model; after that a second of silence took 0.1 s.
+- Clicking the button showed "Listening… tap to send", and a second click sent the text to the Brain with the desk's key, as `desk`/`desk`.
+- With no tracker, the button said so.
+- **A long approval answer:** the stand-in Brain answered like the real one, with a multi-line answer of several hundred characters ending "Say approve or deny.", and gave `/trace` its one cut line.
+  - The card showed the whole answer with its line breaks.
+  - With three of them, "tap for more" appeared. Taps paged down, the hint went at the end, and the next tap went back to the top.
+
+**Checked end to end (2026-11-04):** with the real microphone and the real Brain, "put a note on my desk: buy milk" said through Ask Ekko put the note on the desk.
+
 ## Gestures and smoothing
 
 **In the page (`web/gestures.ts`):**
@@ -270,15 +346,17 @@ server/desk.ts               widgets in data/desk.json: load, change, safe save 
 server/ekko.ts               polls the Brain's /trace; pushes new turns
 server/upstream.ts           copied from ekko-deck, plus the poll loop the chat and Files cards share
 server/files.ts              Ekko.Files: the Files card's list, opening viewers, the Pi's copy of each open file
-server/desk.test.ts, server/ekko.test.ts, server/files.test.ts
+server/ask.ts                Ask Ekko: tells the tracker to listen, sends what it heard to the Brain
+server/desk.test.ts, server/ekko.test.ts, server/files.test.ts, server/ask.test.ts
 web/index.html               <title>Ekko Desk</title> (the labwc window rule matches it)
 web/main.tsx, web/style.css  desk and cards; redraws only on messages and drags; black background, no blur, shadows or transitions
 web/gestures.ts (+ test)     pointers → tap / drag / resize / dock / trash
 ops/ekko-desk.service        systemd unit; README holds the labwc and tailscale steps
-tracker/requirements.txt     mediapipe, websockets (pinned)
+tracker/requirements.txt     mediapipe, websockets, sounddevice (pinned)
 tracker/main.py              --source 0|url  --desk url  --record/--replay file  --calibrate  --preview
 tracker/pinch.py (+ test)    landmarks → down/move/up/cancel
 tracker/calibrate.py (+ test) ArUco image, detection, homography (RANSAC), error in px
+tracker/listen.py (+ test)   Ask Ekko: records the PC's microphone, then speaches turns it into text
 tracker/recordings/          the clips the tests replay (*.jsonl.gz)
 ```
 

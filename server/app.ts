@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
+import type { Ask } from './ask.ts';
 import type { Desk, Result } from './desk.ts';
 import type { Files } from './files.ts';
 
@@ -35,7 +36,7 @@ const brain: MiddlewareHandler = async (c, next) => {
   await next();
 };
 
-export const createApp = (desk: Desk, files: Files) =>
+export const createApp = (desk: Desk, files: Files, ask: Pick<Ask, 'start' | 'stop'>) =>
   new Hono()
     // The page's routes. Loopback alone doesn't stop another page open in a browser on the Pi from calling us
     // (CSRF, DNS rebinding): the custom header forces a CORS preflight we never approve, and the Host check rejects rebound names.
@@ -53,6 +54,13 @@ export const createApp = (desk: Desk, files: Files) =>
       return reply(c, files.openListed(typeof b?.file === 'string' ? b.file : ''));
     })
     .get('/api/desk/files/:id', (c) => files.serve(c.req.param('id')))
+    // How it went comes to every page as an `ask` message.
+    .post('/api/desk/ask', async (c) => {
+      const action: unknown = (await body(c))?.action;
+      if (action !== 'start' && action !== 'stop') return c.json({ ok: false, error: 'action must be start or stop.' }, 400);
+      ask[action]();
+      return c.json({ ok: true });
+    })
     .use('/api/notes', brain)
     .post('/api/notes', async (c) => {
       const b = await body(c);
