@@ -513,7 +513,9 @@ web/ball.ts (+ test)         the toy ball
 web/fighters.ts (+ test)     the two fighters: moves, hits, climbing, knockdowns, rounds, poses
 web/ragdoll.ts               a fighter gone limp: loose joints on fixed-length bones
 web/toys.ts                  runs the ball and fighters together, so the ball can hit them
-ops/ekko-desk.service        systemd unit; README holds the labwc and tailscale steps
+ops/ekko-desk.service        systemd unit; README ("On the Pi") holds the labwc, kanshi and tailscale steps
+ops/desk-browser.sh          the desk's Chromium at login: own profile, CPU-capped, waits for the server
+ops/update.sh                on the Pi: pull main, install, build, restart (the page reloads itself)
 tracker/requirements.txt     mediapipe, websockets, sounddevice (pinned)
 tracker/main.py              --source 0|url  --desk url  --record/--replay file  --calibrate  --preview
 tracker/pinch.py (+ test)    landmarks → down/move/up/cancel

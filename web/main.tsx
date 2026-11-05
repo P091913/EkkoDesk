@@ -290,8 +290,13 @@ function setOnline(on: boolean) {
   redraw();
 }
 
+let dropped = false;
+
 function connect() {
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/page`);
+  ws.onopen = () => {
+    if (dropped) location.reload(); // the server came back, maybe updated (ops/update.sh): load its new page
+  };
   ws.onmessage = (e) => {
     let m;
     try {
@@ -335,6 +340,7 @@ function connect() {
     }
   };
   ws.onclose = () => {
+    dropped = true;
     setOnline(false);
     setTimeout(connect, 2000);
   };

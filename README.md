@@ -40,6 +40,54 @@ npm start              # then open http://127.0.0.1:8081
 - **`npm run dev`:** Vite with hot reload on http://localhost:5173. Keep `npm start` running, since it serves `/ws`.
 - **`npm test`** and **`npm run check`:** the tests and the typecheck.
 
+## On the Pi
+
+The desk runs on the Pi next to ekko-deck: its own server on `127.0.0.1:8081`, and its own Chromium, full screen on the
+projector (`HDMI-A-1`). The tracker stays on the PC. `<pi>.<tailnet>` below is the Pi's tailnet name; keep it out of git.
+
+**Install, once:**
+```bash
+git clone https://github.com/P091913/EkkoDesk.git ~/ekko-desk
+cd ~/ekko-desk && npm ci && npm run build
+```
+- **`.env`:** copy the PC's over (`scp .env <user>@<pi>:ekko-desk/.env` from the PC). Then point its URLs at the PC, using
+  the PC's name from the deck's `.env`:
+  ```bash
+  PC=$(sed -n 's#^EKKO_URL=https*://\([^:/]*\).*#\1#p' ~/ekko-deck/.env)
+  sed -i "s#//\(127\.0\.0\.1\|localhost\):#//$PC:#" ~/ekko-desk/.env
+  ```
+- **Server:** `sudo cp ~/ekko-desk/ops/ekko-desk.service /etc/systemd/system/`, then `sudo systemctl daemon-reload` and
+  `sudo systemctl enable --now ekko-desk`.
+- **Tailnet:** `sudo tailscale serve --bg --https=8445 http://127.0.0.1:8081`, for Ekko's Brain and the tracker.
+  - Ekko's `.env`: `Desk_BaseUrl=https://<pi>.<tailnet>.ts.net:8445/`, then restart the Brain.
+  - The tracker: `--desk wss://<pi>.<tailnet>.ts.net:8445/ws/tracker`.
+  - The page's routes refuse the tailnet name (Host check), so only the Pi's own Chromium can use them.
+- **Browser at login:** `~/.config/autostart/ekko-desk.desktop` runs `ops/desk-browser.sh`:
+  ```ini
+  [Desktop Entry]
+  Type=Application
+  Name=Ekko Desk
+  Exec=sh /home/<user>/ekko-desk/ops/desk-browser.sh
+  ```
+- **Screens:** in `~/.config/labwc/rc.xml`, next to the `<touch …/>` line, then `kill -HUP $(pidof labwc)`:
+  ```xml
+  <windowRules>
+    <windowRule identifier="chrome-127.0.0.1*">
+      <action name="MoveToOutput" output="HDMI-A-1"/>
+      <action name="ToggleFullscreen"/>
+    </windowRule>
+    <windowRule identifier="chromium">
+      <action name="MoveToOutput" output="DSI-1"/>
+    </windowRule>
+  </windowRules>
+  ```
+  The first sends the desk's window (`--app`) to the projector full screen; the second keeps the deck on the touchscreen.
+- **Projector mode:** 1280x720, its native resolution, set in `~/.config/kanshi/config`.
+
+**Updating:** merge to main on GitHub, then `sh ~/ekko-desk/ops/update.sh` on the Pi. It pulls, installs, builds and
+restarts the server; the page reloads itself when the server is back. `.env` and `data/` are never touched, so a new
+`.env` name is added there by hand.
+
 ## Tracker
 
 Python 3.14 (MediaPipe 1.2.0 supports 3.9–3.14).
